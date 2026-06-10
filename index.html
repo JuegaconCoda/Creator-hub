@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
@@ -325,7 +325,14 @@ body {
           <div class="form-group"><label for="register-password">Contrase&ntilde;a</label><input type="password" id="register-password" required minlength="4" placeholder="M&iacute;nimo 4 caracteres" autocomplete="new-password"></div>
           <div id="creator-fields" class="role-fields"><div class="form-group"><label for="youtube-channel">Enlace de tu canal de YouTube</label><input type="url" id="youtube-channel" placeholder="https://youtube.com/@tucanal"></div></div>
           <div id="collaborator-fields" class="role-fields hidden">
-            <div class="form-group"><label for="creator-id">ID del Creador</label><input type="text" id="creator-id" placeholder="CR-XXXX-XXXX-XXXX"><small class="form-hint">Pide este c&oacute;digo al creador. Si usas otro navegador, configura Firebase en Ajustes (misma config que el creador).</small></div>
+            <div class="form-group"><label for="creator-id">ID del Creador</label><input type="text" id="creator-id" placeholder="CR-XXXX-XXXX-XXXX"><small class="form-hint">Pide este c&oacute;digo al creador (lo ve en Ajustes).</small></div>
+          </div>
+          <div id="auth-firebase-section" class="role-fields hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px"><strong>Firebase</strong> (obligatorio para colaboradores remotos). Pide al creador estos 3 datos de Ajustes &rarr; Firebase.</p>
+            <div class="form-group"><label for="auth-fb-api-key">API Key</label><input type="text" id="auth-fb-api-key" placeholder="AIza..." autocomplete="off"></div>
+            <div class="form-group"><label for="auth-fb-project-id">Project ID</label><input type="text" id="auth-fb-project-id" placeholder="mi-proyecto" autocomplete="off"></div>
+            <div class="form-group"><label for="auth-fb-app-id">App ID</label><input type="text" id="auth-fb-app-id" placeholder="1:123:web:abc" autocomplete="off"></div>
+            <p id="auth-firebase-status" class="form-hint" style="margin-top:4px"></p>
           </div>
           <button type="submit" class="btn btn-primary btn-full">Crear cuenta</button>
         </form>
@@ -590,13 +597,52 @@ const Cloud = {
   },
 
   saveConfig(config) {
-    Storage.set(Storage.KEYS.FIREBASE, config);
-    this.init();
+    return this.applyConfig(config);
   },
 
   isConfigured() {
     const c = this.getConfig();
     return !!(c?.apiKey && c?.projectId && c?.appId);
+  },
+
+  applyConfig(config) {
+    if (!config?.apiKey || !config?.projectId || !config?.appId) return false;
+    Storage.set(Storage.KEYS.FIREBASE, {
+      apiKey: config.apiKey.trim(),
+      projectId: config.projectId.trim(),
+      appId: config.appId.trim(),
+      authDomain: config.authDomain?.trim() || '',
+      storageBucket: config.storageBucket?.trim() || '',
+      messagingSenderId: config.messagingSenderId?.trim() || ''
+    });
+    this.init();
+    return this.enabled;
+  },
+
+  async bootstrap() {
+    if (this.isConfigured()) {
+      this.init();
+      return this.enabled;
+    }
+
+    const urls = [];
+    if (typeof AppConfig !== 'undefined') {
+      urls.push(AppConfig.publicUrl + 'firebase-config.json');
+    }
+    urls.push('firebase-config.json');
+
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const config = await res.json();
+        if (this.applyConfig(config)) return true;
+      } catch (e) {
+        console.warn('[Cloud] firebase-config.json no disponible en', url);
+      }
+    }
+
+    return false;
   },
 
   init() {
@@ -729,11 +775,12 @@ const Cloud = {
     if (existing) return { success: false, message: 'Este nombre de usuario ya existe' };
 
     if (user.role === 'collaborator') {
-      const creator = await this.getUserByCreatorCode(user.creatorId);
+      const creatorCode = user.activeCreatorId || user.creatorId;
+      const creator = await this.getUserByCreatorCode(creatorCode);
       if (!creator) {
         return {
           success: false,
-          message: 'ID de creador no encontrado en la nube. El creador debe pulsar "Subir mi cuenta a la nube" en Ajustes.'
+          message: 'ID de creador no encontrado en la nube. El creador debe ir a Ajustes \u2192 Firebase \u2192 "Subir mi cuenta a la nube".'
         };
       }
     }
@@ -765,7 +812,8 @@ const Cloud = {
     }
 
     if (user.role === 'collaborator') {
-      const creator = await this.getUserByCreatorCode(user.creatorId);
+      const creatorCode = user.activeCreatorId || user.creatorId;
+      const creator = await this.getUserByCreatorCode(creatorCode);
       const ws = await this.workspaceRef(creator.id).get();
       const collabs = ws.exists ? (ws.data().collaborators || []) : [];
       collabs.push({
@@ -907,24 +955,40 @@ const Auth = {
     let creator = Storage.getUsers().find(u => u.role === 'creator' && u.creatorCode === code);
     if (creator) return { creator, code };
 
+    if (!Cloud.isConfigured()) {
+      await Cloud.bootstrap();
+    }
+
     if (Cloud.isConfigured()) {
       if (!Cloud.enabled) Cloud.init();
       if (Cloud.enabled) {
-        creator = await Cloud.getUserByCreatorCode(code);
+        try {
+          creator = await Cloud.getUserByCreatorCode(code);
+        } catch (e) {
+          console.error('[Auth] Error buscando creador en la nube:', e);
+          return {
+            creator: null, code,
+            error: 'Error al conectar con Firebase. Revisa la configuraci\u00f3n (API Key, Project ID, App ID) y que Firestore est\u00e9 activo.'
+          };
+        }
         if (creator) {
           Storage.cacheUser(creator);
           return { creator, code };
         }
         return {
           creator: null, code,
-          error: 'Creador no encontrado en la nube. El creador debe ir a Ajustes \u2192 Firebase \u2192 "Subir mi cuenta a la nube" en su navegador.'
+          error: `Creador "${code}" no encontrado en la nube. El creador debe iniciar sesi\u00f3n en ${typeof AppConfig !== 'undefined' ? AppConfig.publicUrl : 'la web'}, ir a Ajustes \u2192 Firebase y pulsar "Subir mi cuenta a la nube".`
         };
       }
+      return {
+        creator: null, code,
+        error: 'Firebase configurado pero no conecta. Revisa API Key, Project ID y App ID (deben ser los mismos que el creador).'
+      };
     }
 
     return {
       creator: null, code,
-      error: 'Usas otro navegador/dispositivo. Configura Firebase en Ajustes (la misma config en ambos navegadores) y pide al creador que suba su cuenta a la nube.'
+      error: 'Para unirte desde otro dispositivo, pega la configuraci\u00f3n de Firebase abajo (la misma que el creador) o pide al creador que suba firebase-config.json al repositorio.'
     };
   },
 
@@ -2858,7 +2922,9 @@ const App = {
             <button class="btn btn-primary btn-sm" id="save-firebase-btn">Guardar Firebase</button>
             <button class="btn btn-secondary btn-sm" id="test-firebase-btn">Probar conexi\u00f3n</button>
             ${isCreator ? '<button class="btn btn-secondary btn-sm" id="upload-cloud-btn">Subir mi cuenta a la nube</button>' : ''}
+            ${isCreator ? '<button class="btn btn-secondary btn-sm" id="export-firebase-btn">Descargar firebase-config.json</button>' : ''}
           </div>
+          ${isCreator ? '<p style="font-size:11px;color:var(--text-muted);margin-top:8px">Sube <code>firebase-config.json</code> a tu repo de GitHub para que los colaboradores no tengan que pegar Firebase manualmente.</p>' : ''}
           <div id="firebase-status" style="margin-top:10px;font-size:13px;color:var(--text-muted)">
             ${Cloud.enabled ? '\u2705 Nube activa \u2014 los colaboradores remotos pueden sincronizar' : '\u26a0\ufe0f Solo modo local \u2014 configura Firebase para colaboraci\u00f3n remota'}
           </div>
@@ -2990,6 +3056,25 @@ const App = {
         }
         this.showToast(e.message, 'error');
       }
+    });
+
+    document.getElementById('export-firebase-btn')?.addEventListener('click', () => {
+      const config = Storage.get(Storage.KEYS.FIREBASE);
+      if (!config?.apiKey || !config?.projectId || !config?.appId) {
+        this.showToast('Guarda Firebase primero', 'error');
+        return;
+      }
+      const blob = new Blob([JSON.stringify({
+        apiKey: config.apiKey,
+        projectId: config.projectId,
+        appId: config.appId
+      }, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'firebase-config.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      this.showToast('Descargado. S\u00fabelo a la ra\u00edz del repo en GitHub', 'success');
     });
 
     document.getElementById('test-firebase-btn')?.addEventListener('click', async () => {
@@ -3144,13 +3229,58 @@ function setupAuthForms() {
       document.getElementById(tab.dataset.tab + '-form').classList.add('active');
     });
   });
+  function saveAuthFirebaseFromForm() {
+    const apiKey = document.getElementById('auth-fb-api-key')?.value.trim();
+    const projectId = document.getElementById('auth-fb-project-id')?.value.trim();
+    const appId = document.getElementById('auth-fb-app-id')?.value.trim();
+    if (apiKey && projectId && appId) {
+      Cloud.saveConfig({ apiKey, projectId, appId });
+      return true;
+    }
+    return Cloud.isConfigured();
+  }
+
+  function fillAuthFirebaseFields() {
+    const c = Storage.get(Storage.KEYS.FIREBASE) || {};
+    const api = document.getElementById('auth-fb-api-key');
+    const proj = document.getElementById('auth-fb-project-id');
+    const app = document.getElementById('auth-fb-app-id');
+    if (api && c.apiKey) api.value = c.apiKey;
+    if (proj && c.projectId) proj.value = c.projectId;
+    if (app && c.appId) app.value = c.appId;
+    updateAuthFirebaseStatus();
+  }
+
+  function updateAuthFirebaseStatus() {
+    const el = document.getElementById('auth-firebase-status');
+    if (!el) return;
+    if (Cloud.enabled) {
+      el.textContent = '\u2705 Firebase conectado';
+      el.style.color = 'var(--success)';
+    } else if (Cloud.isConfigured()) {
+      el.textContent = '\u26a0\ufe0f Firebase guardado pero sin conexi\u00f3n. Revisa los datos.';
+      el.style.color = 'var(--accent)';
+    } else {
+      el.textContent = 'Pega la misma config Firebase que el creador (Ajustes \u2192 Firebase).';
+      el.style.color = 'var(--text-muted)';
+    }
+  }
+
   document.querySelectorAll('input[name="role"]').forEach(radio => {
     radio.addEventListener('change', () => {
       const isCreator = radio.value === 'creator';
       document.getElementById('creator-fields').classList.toggle('hidden', !isCreator);
       document.getElementById('collaborator-fields').classList.toggle('hidden', isCreator);
+      document.getElementById('auth-firebase-section').classList.toggle('hidden', isCreator);
       document.getElementById('youtube-channel').required = isCreator;
       document.getElementById('creator-id').required = !isCreator;
+    });
+  });
+
+  ['auth-fb-api-key', 'auth-fb-project-id', 'auth-fb-app-id'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', () => {
+      saveAuthFirebaseFromForm();
+      updateAuthFirebaseStatus();
     });
   });
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -3159,6 +3289,8 @@ function setupAuthForms() {
     btn.disabled = true;
     btn.textContent = 'Entrando...';
     try {
+      saveAuthFirebaseFromForm();
+      await Cloud.bootstrap();
       const result = await Auth.login(
         document.getElementById('login-username').value.trim(),
         document.getElementById('login-password').value
@@ -3179,6 +3311,17 @@ function setupAuthForms() {
     btn.textContent = 'Creando...';
     try {
       const role = document.querySelector('input[name="role"]:checked').value;
+      if (role === 'collaborator') {
+        saveAuthFirebaseFromForm();
+        await Cloud.bootstrap();
+        if (!Cloud.enabled) {
+          showAuthMessage({
+            success: false,
+            message: 'Configura Firebase abajo (misma config que el creador) antes de registrarte como colaborador.'
+          });
+          return;
+        }
+      }
       const data = {
         username: document.getElementById('register-username').value.trim(),
         password: document.getElementById('register-password').value,
@@ -3205,9 +3348,10 @@ function showAuthMessage(result) {
   el.classList.remove('hidden');
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  Cloud.init();
+document.addEventListener('DOMContentLoaded', async () => {
+  await Cloud.bootstrap();
   setupAuthForms();
+  fillAuthFirebaseFields();
   if (Auth.getSession()) Router.showApp();
   else Router.showAuth();
 });
