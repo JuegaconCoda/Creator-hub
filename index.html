@@ -477,6 +477,105 @@ const AppConfig = {
 };
 
 
+const Security = {
+  SENSITIVE_USER_FIELDS: ['password', 'email'],
+
+  SENSITIVE_SETTING_FIELDS: ['googleAccessToken'],
+
+  SENSITIVE_CLOUD_FIELDS: ['token', 'apiKey'],
+
+  async hashPassword(password) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password || ''));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  },
+
+  sanitizeUser(user, options = {}) {
+    if (!user || typeof user !== 'object') return user;
+    const copy = { ...user };
+    this.SENSITIVE_USER_FIELDS.forEach(field => delete copy[field]);
+    if (!options.keepPasswordHash) delete copy.passwordHash;
+    return copy;
+  },
+
+  sanitizeUsers(users, options = {}) {
+    return (users || []).map(u => this.sanitizeUser(u, options));
+  },
+
+  sanitizeCloudUser(user) {
+    return this.sanitizeUser(user, { keepPasswordHash: true });
+  },
+
+  sanitizeCloudUsers(usersMap) {
+    const out = {};
+    Object.entries(usersMap || {}).forEach(([key, user]) => {
+      out[key] = this.sanitizeCloudUser(user);
+    });
+    return out;
+  },
+
+  sanitizeCloudState(state) {
+    if (!state || typeof state !== 'object') return state;
+    return {
+      ...state,
+      users: this.sanitizeCloudUsers(state.users)
+    };
+  },
+
+  sanitizeSettingsForExport(allSettings) {
+    const out = {};
+    Object.entries(allSettings || {}).forEach(([userId, settings]) => {
+      const copy = { ...(settings || {}) };
+      this.SENSITIVE_SETTING_FIELDS.forEach(field => delete copy[field]);
+      out[userId] = copy;
+    });
+    return out;
+  },
+
+  sanitizeSettingsOnImport(incoming, local = {}) {
+    const merged = { ...local };
+    Object.entries(incoming || {}).forEach(([userId, settings]) => {
+      const prev = local[userId] || Storage.defaultSettings();
+      const inc = { ...(settings || {}) };
+      this.SENSITIVE_SETTING_FIELDS.forEach(field => delete inc[field]);
+      merged[userId] = { ...prev, ...inc };
+    });
+    return merged;
+  },
+
+  sanitizeCloudConfigForExport(config) {
+    if (!config) return null;
+    const copy = { ...config };
+    this.SENSITIVE_CLOUD_FIELDS.forEach(field => delete copy[field]);
+    return copy;
+  },
+
+  async normalizeUserForStorage(user) {
+    if (!user) return user;
+    const normalized = this.sanitizeUser(user, { keepPasswordHash: true });
+
+    if (!normalized.passwordHash && user.password) {
+      normalized.passwordHash = await this.hashPassword(user.password);
+    }
+
+    return normalized;
+  },
+
+  async migrateStoredUsers() {
+    const users = Storage.getUsers();
+    let changed = false;
+    const next = await Promise.all(users.map(async u => {
+      const hasPlain = !!u.password;
+      const hasEmail = !!u.email;
+      if (!hasPlain && !hasEmail) return u;
+      changed = true;
+      return this.normalizeUserForStorage(u);
+    }));
+    if (changed) Storage.saveUsers(next);
+    return changed;
+  }
+};
+
+
 const Storage = {
   KEYS: {
     USERS: 'creatorhub_users',
@@ -544,28 +643,27 @@ const Storage = {
   },
 
   saveUsers(users) {
-    this.set(this.KEYS.USERS, users);
+    const safe = (users || []).map(u => Security.sanitizeUser(u, { keepPasswordHash: true }));
+    this.set(this.KEYS.USERS, safe);
   },
 
   findUserByUsername(username) {
     const u = (username || '').trim().toLowerCase();
     return this.getUsers().find(user =>
       (user.username && user.username === u) ||
-      (user.email && user.email.toLowerCase() === u) ||
       (user.name && user.name.toLowerCase() === u)
     );
   },
 
-  cacheUser(user) {
+  async cacheUser(user) {
     const users = this.getUsers();
     const existing = users.find(u => u.id === user.id);
-    const merged = {
+    const merged = await Security.normalizeUserForStorage({
       ...existing,
       ...user,
-      password: user.password || existing?.password || '',
       creatorCode: user.creatorCode || existing?.creatorCode || null,
       passwordHash: user.passwordHash || existing?.passwordHash
-    };
+    });
     const next = users.filter(u => u.id !== user.id);
     next.push(merged);
     this.saveUsers(next);
@@ -576,13 +674,12 @@ const Storage = {
     const map = new Map(local.map(u => [u.id, u]));
     cloudUsers.forEach(u => {
       const prev = map.get(u.id) || {};
-      map.set(u.id, {
+      map.set(u.id, Security.sanitizeUser({
         ...prev,
         ...u,
-        password: prev.password || '',
         creatorCode: u.creatorCode || prev.creatorCode || null,
         passwordHash: u.passwordHash || prev.passwordHash
-      });
+      }, { keepPasswordHash: true }));
     });
     this.saveUsers([...map.values()]);
   },
@@ -841,7 +938,10 @@ const GitHubSync = {
   },
 
   mergeStates(remote, local) {
-    const users = { ...(remote.users || {}), ...(local.users || {}) };
+    const users = Security.sanitizeCloudUsers({
+      ...(remote.users || {}),
+      ...(local.users || {})
+    });
     const codes = { ...(remote.codes || {}), ...(local.codes || {}) };
     const workspaces = { ...(remote.workspaces || {}) };
 
@@ -985,19 +1085,25 @@ const Cloud = {
     if (!config) return false;
     const prev = this.getConfig() || {};
 
-    if (config.provider === 'github' || config.owner || config.token) {
-      const record = GitHubSync.normalizeConfig({ ...prev, ...config, provider: 'github' });
+    if (config.provider === 'github' || config.owner || config.token !== undefined) {
+      const record = GitHubSync.normalizeConfig({
+        ...prev,
+        ...config,
+        provider: 'github',
+        token: (config.token || '').trim() || prev.token || ''
+      });
       if (!record.owner || !record.repo) return false;
       Storage.set(Storage.KEYS.CLOUD, record);
       this.init();
       return this.enabled;
     }
 
-    if (!config.apiKey?.trim()) return false;
+    const apiKey = (config.apiKey || '').trim() || prev.apiKey || '';
+    if (!apiKey) return false;
     const record = {
       provider: 'jsonbin',
-      apiKey: config.apiKey.trim(),
-      binId: (config.binId || '').trim()
+      apiKey,
+      binId: (config.binId || prev.binId || '').trim()
     };
     Storage.set(Storage.KEYS.CLOUD, record);
     this.init();
@@ -1156,6 +1262,7 @@ const Cloud = {
   },
 
   async saveState(state) {
+    state = Security.sanitizeCloudState(state);
     if (this.getProvider() === 'github') {
       state.updatedAt = new Date().toISOString();
       this._githubSha = await GitHubSync.save(this.getConfig(), state, this._githubSha);
@@ -1183,12 +1290,11 @@ const Cloud = {
   },
 
   async hashPassword(password) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return Security.hashPassword(password);
   },
 
   async verifyPassword(password, hash) {
-    return (await this.hashPassword(password)) === hash;
+    return (await Security.hashPassword(password)) === hash;
   },
 
   userFromState(state, username) {
@@ -1235,8 +1341,8 @@ const Cloud = {
       Storage.saveUsers(users);
     }
 
-    const passwordHash = user.passwordHash || await this.hashPassword(user.password || '');
-    if (!passwordHash && !user.password) {
+    const passwordHash = user.passwordHash;
+    if (!passwordHash) {
       throw new Error('No se puede subir la cuenta sin contrase\u00f1a. Vuelve a iniciar sesi\u00f3n.');
     }
 
@@ -1245,7 +1351,7 @@ const Cloud = {
       id: user.id,
       username: user.username,
       name: user.name || user.username,
-      passwordHash: passwordHash || await this.hashPassword(user.password),
+      passwordHash,
       role: 'creator',
       youtubeChannel: user.youtubeChannel || '',
       creatorCode: user.creatorCode,
@@ -1293,7 +1399,10 @@ const Cloud = {
       }
     }
 
-    const passwordHash = await this.hashPassword(user.password);
+    const passwordHash = user.passwordHash;
+    if (!passwordHash) {
+      return { success: false, message: 'Contrase\u00f1a inv\u00e1lida' };
+    }
     const record = {
       id: user.id,
       username,
@@ -1340,7 +1449,7 @@ const Cloud = {
     }
 
     await this.saveState(state);
-    Storage.cacheUser(record);
+    await Storage.cacheUser(record);
     return { success: true, message: '\u00a1Cuenta creada en la nube!', user: record };
   },
 
@@ -1356,10 +1465,9 @@ const Cloud = {
       const merged = {
         ...local,
         ...user,
-        password: local?.password || '',
         creatorCode: user.creatorCode || local?.creatorCode || null
       };
-      Storage.cacheUser(merged);
+      await Storage.cacheUser(merged);
       Auth.ensureCreatorCode(merged);
       try {
         await this.pullWorkspaceForUser(merged);
@@ -1510,13 +1618,15 @@ const Cloud = {
   },
 
   readGitHubForm() {
+    const prev = this.getConfig() || {};
+    const tokenInput = document.getElementById('github-token')?.value.trim();
     return {
       provider: 'github',
       owner: document.getElementById('github-owner')?.value.trim(),
       repo: document.getElementById('github-repo')?.value.trim(),
       branch: document.getElementById('github-branch')?.value.trim() || 'main',
       path: document.getElementById('github-path')?.value.trim() || GitHubSync.DEFAULT_PATH,
-      token: document.getElementById('github-token')?.value.trim()
+      token: tokenInput || prev.token || ''
     };
   }
 };
@@ -1577,7 +1687,7 @@ const Auth = {
           };
         }
         if (creator) {
-          Storage.cacheUser(creator);
+          await Storage.cacheUser(creator);
           if (creator.creatorCode) Storage.setCreatorCode(creator.id, creator.creatorCode);
           return { creator, code };
         }
@@ -1641,14 +1751,15 @@ const Auth = {
       if (!resolved.creator) return { success: false, message: resolved.error };
       creatorCode = resolved.code;
       linkedCreator = resolved.creator;
-      Storage.cacheUser(linkedCreator);
+      await Storage.cacheUser(linkedCreator);
     }
 
+    const passwordHash = await Security.hashPassword(data.password);
     const user = {
       id: Storage.generateUuid(),
       username,
       name: username,
-      password: data.password,
+      passwordHash,
       role: data.role,
       youtubeChannel: data.role === 'creator' ? data.youtubeChannel : '',
       creatorCode: null,
@@ -1710,9 +1821,25 @@ const Auth = {
     return { success: true, message: '\u00a1Cuenta creada! Redirigiendo...' + cloudHint };
   },
 
-  loginLocal(username, password) {
+  async verifyLocalPassword(user, password) {
+    if (!user) return false;
+    if (user.passwordHash) {
+      return user.passwordHash === await Security.hashPassword(password);
+    }
+    if (user.password) {
+      if (user.password !== password) return false;
+      await Storage.cacheUser({
+        ...user,
+        passwordHash: await Security.hashPassword(password)
+      });
+      return true;
+    }
+    return false;
+  },
+
+  async loginLocal(username, password) {
     const user = Storage.findUserByUsername(username);
-    if (!user || user.password !== password) return null;
+    if (!(await this.verifyLocalPassword(user, password))) return null;
     Storage.setSession({ userId: user.id, role: user.role, username: user.username || username });
     return user;
   },
@@ -1722,7 +1849,7 @@ const Auth = {
     if (!check.ok) return { success: false, message: check.message };
 
     const localUser = Storage.findUserByUsername(check.username);
-    const localOk = localUser && localUser.password === password;
+    const localOk = await this.verifyLocalPassword(localUser, password);
 
     if (Cloud.isConfigured()) {
       if (!Cloud.enabled) Cloud.init();
@@ -1732,22 +1859,21 @@ const Auth = {
           const merged = {
             ...localUser,
             ...result.user,
-            password: localUser?.password || '',
             creatorCode: result.user.creatorCode || localUser?.creatorCode || null
           };
-          Storage.cacheUser(merged);
+          await Storage.cacheUser(merged);
           this.ensureCreatorCode(merged);
           Storage.setSession({ userId: merged.id, role: merged.role, username: merged.username });
           Cloud.startAutoSync();
           return { success: true, message: '\u00a1Bienvenido de vuelta!' };
         }
         if (localOk && (result.offline || result.notInCloud)) {
-          this.loginLocal(check.username, password);
+          await this.loginLocal(check.username, password);
           return {
             success: true,
             message: result.offline
-              ? 'Entraste en modo local (Firebase sin conexi\u00f3n). Ve a Ajustes \u2192 "Subir mi cuenta a la nube".'
-              : '\u00a1Bienvenido! (modo local \u2014 sube tu cuenta a Firebase en Ajustes para colaboradores remotos)'
+              ? 'Entraste en modo local (sin conexi\u00f3n a la nube).'
+              : '\u00a1Bienvenido! (modo local \u2014 configura la sincronizaci\u00f3n en Ajustes)'
           };
         }
         return result;
@@ -1755,7 +1881,7 @@ const Auth = {
     }
 
     if (localOk) {
-      this.loginLocal(check.username, password);
+      await this.loginLocal(check.username, password);
       return { success: true, message: '\u00a1Bienvenido de vuelta!' };
     }
 
@@ -1800,7 +1926,7 @@ const Auth = {
     if (!creator && Cloud.isConfigured()) {
       if (!Cloud.enabled) Cloud.init();
       creator = await Cloud.getUserByCreatorCode(code);
-      if (creator) Storage.cacheUser(creator);
+      if (creator) await Storage.cacheUser(creator);
     }
 
     if (!creator) return { success: false, message: 'ID de creador no encontrado' };
@@ -1863,7 +1989,7 @@ const Sync = {
     if (!user) throw new Error('Debes iniciar sesi\u00f3n');
 
     const registry = Storage.getCreatorRegistry();
-    const users = Storage.getUsers();
+    const users = Security.sanitizeUsers(Storage.getUsers());
     const payload = {
       version: this.VERSION,
       type: 'creatorhub-backup',
@@ -1874,7 +2000,7 @@ const Sync = {
       projects: Storage.get(Storage.KEYS.PROJECTS) || {},
       tasks: Storage.get(Storage.KEYS.TASKS) || {},
       collaborators: Storage.get(Storage.KEYS.COLLABS) || {},
-      settings: Storage.get(Storage.KEYS.SETTINGS) || {}
+      settings: Security.sanitizeSettingsForExport(Storage.get(Storage.KEYS.SETTINGS) || {})
     };
 
     if (creatorId) {
@@ -1921,12 +2047,12 @@ const Sync = {
       const map = new Map(local.map(u => [u.id, u]));
       data.users.forEach(u => {
         const prev = map.get(u.id) || {};
-        map.set(u.id, {
+        map.set(u.id, Security.sanitizeUser({
           ...prev,
           ...u,
-          password: u.password || prev.password || '',
-          creatorCode: u.creatorCode || prev.creatorCode || Storage.getCreatorCodeForUser(u.id)
-        });
+          creatorCode: u.creatorCode || prev.creatorCode || Storage.getCreatorCodeForUser(u.id),
+          passwordHash: prev.passwordHash || u.passwordHash
+        }, { keepPasswordHash: true }));
       });
       Storage.saveUsers([...map.values()]);
       data.users.filter(u => u.role === 'creator' && u.creatorCode).forEach(u => {
@@ -1947,7 +2073,14 @@ const Sync = {
     mergeWorkspaceMap(Storage.KEYS.PROJECTS, data.projects, Storage.mergeItemsById.bind(Storage));
     mergeWorkspaceMap(Storage.KEYS.TASKS, data.tasks, Storage.mergeItemsById.bind(Storage));
     mergeWorkspaceMap(Storage.KEYS.COLLABS, data.collaborators, Storage.mergeCollaborators.bind(Storage));
-    mergeObj(Storage.KEYS.SETTINGS, data.settings);
+
+    if (data.settings && typeof data.settings === 'object') {
+      const localSettings = Storage.get(Storage.KEYS.SETTINGS) || {};
+      Storage.set(
+        Storage.KEYS.SETTINGS,
+        Security.sanitizeSettingsOnImport(data.settings, localSettings)
+      );
+    }
   },
 
   getInviteLink(creatorCode) {
@@ -3679,8 +3812,14 @@ const App = {
       repo: cfg.repo || detected?.repo || '',
       branch: cfg.branch || detected?.branch || 'main',
       path: cfg.path || detected?.path || 'data/creatorhub-sync.json',
-      token: cfg.token || ''
+      hasToken: !!cfg.token
     };
+  },
+
+  secretInputAttrs(hasValue) {
+    return hasValue
+      ? 'value="" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (ya configurado \u2014 deja vac\u00edo para mantener)" autocomplete="off"'
+      : 'value="" placeholder="" autocomplete="off"';
   },
 
   renderGitHubSyncHtml(isCreator = true) {
@@ -3708,7 +3847,7 @@ const App = {
         </div>
         <div class="form-group">
           <label>Token de GitHub (PAT)</label>
-          <input type="password" id="github-token" value="${gh.token}" placeholder="github_pat_... o ghp_...">
+          <input type="password" id="github-token" ${this.secretInputAttrs(gh.hasToken)}>
           <small class="form-hint"><a href="https://github.com/settings/tokens?type=beta" target="_blank" style="color:var(--accent)">Crear token</a> con permiso <strong>Contents: Read and write</strong> en este repo. No lo subas al repo.</small>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -3800,6 +3939,7 @@ const App = {
     const hasSharedAi = !!(settings.geminiApiKey || settings.groqApiKey);
     const hasSharedYoutube = !!settings.youtubeApiKey;
     const syncLabel = Cloud.enabled ? Cloud.getSyncLabel() : 'archivo';
+    const cloudCfg = Storage.get(Storage.KEYS.CLOUD) || {};
 
     const deployInfo = typeof AppConfig !== 'undefined' ? AppConfig.getEnvironmentLabel() : 'Web';
     const publicUrl = typeof AppConfig !== 'undefined' ? AppConfig.publicUrl : window.location.href;
@@ -3897,17 +4037,17 @@ const App = {
           </div>
           <div class="form-group">
             <label>Gemini API Key</label>
-            <input type="password" id="settings-gemini-key" value="${settings.geminiApiKey || ''}" placeholder="AIza...">
+            <input type="password" id="settings-gemini-key" ${this.secretInputAttrs(!!settings.geminiApiKey)} placeholder="AIza...">
             <small class="form-hint"><a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent)">Obtener en Google AI Studio</a></small>
           </div>
           <div class="form-group">
             <label>Groq API Key</label>
-            <input type="password" id="settings-groq-key" value="${settings.groqApiKey || ''}" placeholder="gsk_...">
+            <input type="password" id="settings-groq-key" ${this.secretInputAttrs(!!settings.groqApiKey)} placeholder="gsk_...">
             <small class="form-hint"><a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent)">Obtener en Groq Console</a></small>
           </div>
           <div class="form-group">
             <label>YouTube Data API Key (requerida para an\u00e1lisis del canal)</label>
-            <input type="password" id="settings-youtube-key" value="${settings.youtubeApiKey || ''}" placeholder="AIza...">
+            <input type="password" id="settings-youtube-key" ${this.secretInputAttrs(!!settings.youtubeApiKey)} placeholder="AIza...">
             <small class="form-hint">1) Activa <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" style="color:var(--accent)">YouTube Data API v3</a></small>
           </div>
           <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
@@ -3936,7 +4076,7 @@ const App = {
             <p style="margin:10px 0">Solo si quieres sync autom\u00e1tica. Requiere cuenta en <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a>.</p>
             <div class="form-group">
               <label>API Key JSONBin</label>
-              <input type="password" id="cloud-api-key" value="${(Storage.get(Storage.KEYS.CLOUD) || {}).apiKey || ''}" placeholder="X-Master-Key">
+              <input type="password" id="cloud-api-key" ${this.secretInputAttrs(!!cloudCfg.apiKey)} placeholder="X-Master-Key">
             </div>
             <div class="form-group">
               <label>Bin ID</label>
@@ -3996,7 +4136,7 @@ const App = {
       document.getElementById('test-youtube-btn')?.addEventListener('click', async () => {
         const resultEl = document.getElementById('youtube-test-result');
         const channelUrl = document.getElementById('settings-youtube').value.trim();
-        const apiKey = document.getElementById('settings-youtube-key')?.value.trim();
+        const apiKey = document.getElementById('settings-youtube-key')?.value.trim() || settings.youtubeApiKey;
 
         resultEl.textContent = 'Probando conexi\u00f3n...';
         resultEl.style.color = 'var(--text-secondary)';
@@ -4026,12 +4166,15 @@ const App = {
     }
 
     document.getElementById('save-ai-btn')?.addEventListener('click', () => {
+      const gemini = document.getElementById('settings-gemini-key').value.trim();
+      const groq = document.getElementById('settings-groq-key').value.trim();
+      const youtubeKey = document.getElementById('settings-youtube-key').value.trim();
       Storage.saveSettings(settingsOwnerId, {
         ...settings,
         aiProvider: document.getElementById('settings-ai-provider').value,
-        geminiApiKey: document.getElementById('settings-gemini-key').value.trim(),
-        groqApiKey: document.getElementById('settings-groq-key').value.trim(),
-        youtubeApiKey: document.getElementById('settings-youtube-key').value.trim()
+        geminiApiKey: gemini || settings.geminiApiKey || '',
+        groqApiKey: groq || settings.groqApiKey || '',
+        youtubeApiKey: youtubeKey || settings.youtubeApiKey || ''
       });
       this.showToast('Configuraci\u00f3n IA guardada', 'success');
     });
@@ -4107,10 +4250,13 @@ const App = {
       e.target.value = '';
     });
 
-    const readCloudForm = () => ({
-      apiKey: document.getElementById('cloud-api-key').value.trim(),
-      binId: document.getElementById('cloud-bin-id').value.trim()
-    });
+    const readCloudForm = () => {
+      const apiKeyInput = document.getElementById('cloud-api-key').value.trim();
+      return {
+        apiKey: apiKeyInput || cloudCfg.apiKey || '',
+        binId: document.getElementById('cloud-bin-id').value.trim()
+      };
+    };
 
     document.getElementById('copy-bin-id-btn')?.addEventListener('click', () => {
       const binId = document.getElementById('cloud-bin-id').value.trim();
@@ -4158,15 +4304,18 @@ const App = {
       const config = Storage.get(Storage.KEYS.CLOUD);
       let payload;
       if (Cloud.getProvider() === 'github') {
-        payload = {
+        payload = Security.sanitizeCloudConfigForExport({
           provider: 'github',
           owner: config.owner,
           repo: config.repo,
           branch: config.branch || 'main',
           path: config.path || 'data/creatorhub-sync.json'
-        };
-      } else if (config?.apiKey && config?.binId) {
-        payload = { provider: 'jsonbin', apiKey: config.apiKey, binId: config.binId };
+        });
+      } else if (config?.binId) {
+        payload = Security.sanitizeCloudConfigForExport({
+          provider: 'jsonbin',
+          binId: config.binId
+        });
       } else {
         this.showToast('Configura GitHub o JSONBin primero', 'error');
         return;
@@ -4432,6 +4581,7 @@ function showAuthMessage(result) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  await Security.migrateStoredUsers();
   await Cloud.bootstrap();
   setupAuthForms();
   if (Auth.getSession()) {
