@@ -327,7 +327,7 @@ body {
 
 /* ===== AI AGENT ===== */
 .agent-fab {
-  position: fixed; bottom: 24px; left: 24px; z-index: 1900;
+  position: fixed; right: 24px; bottom: 88px; left: auto; z-index: 1900;
   width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
   background: linear-gradient(135deg, var(--accent), var(--purple));
   box-shadow: 0 8px 32px rgba(255, 68, 68, 0.45);
@@ -339,8 +339,8 @@ body {
 .agent-fab-icon { font-size: 26px; line-height: 1; }
 
 .agent-panel {
-  position: fixed; bottom: 92px; left: 24px; z-index: 1899;
-  width: min(420px, calc(100vw - 48px)); max-height: min(560px, calc(100vh - 120px));
+  position: fixed; right: 24px; bottom: 156px; left: auto; z-index: 1899;
+  width: min(420px, calc(100vw - 48px)); max-height: min(560px, calc(100vh - 180px));
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden;
 }
@@ -426,6 +426,26 @@ body {
 }
 .agent-status { font-size: 11px; color: var(--text-muted); }
 
+.agent-voice-settings {
+  padding: 10px 12px; border-top: 1px solid var(--border);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: var(--bg-secondary);
+}
+.agent-voice-settings.agent-voice-settings-page { grid-template-columns: 1fr; gap: 10px; }
+.agent-voice-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.agent-voice-field label {
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.agent-voice-field select {
+  width: 100%; padding: 7px 8px; font-size: 12px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit;
+}
+.agent-voice-field select:focus { outline: none; border-color: var(--accent); }
+.agent-voice-hint {
+  grid-column: 1 / -1; font-size: 11px; color: var(--text-muted); line-height: 1.4;
+}
+
 .agent-page-header {
   display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
   margin-bottom: 20px; flex-wrap: wrap;
@@ -456,8 +476,9 @@ body {
 }
 
 @media (max-width: 768px) {
-  .agent-fab { bottom: 16px; left: 16px; width: 50px; height: 50px; }
-  .agent-panel { left: 16px; bottom: 78px; width: calc(100vw - 32px); }
+  .agent-fab { right: 16px; bottom: 80px; width: 50px; height: 50px; }
+  .agent-panel { right: 16px; bottom: 142px; width: calc(100vw - 32px); }
+  .agent-voice-settings { grid-template-columns: 1fr; }
 }
 
 html.has-session #auth-view { display: none !important; }
@@ -3414,6 +3435,52 @@ IMPORTANTE: Responde \u00daNICAMENTE con JSON v\u00e1lido. Sin markdown, sin tex
     return text;
   },
 
+  async transcribeAudio(audioBlob, apiKey, language = 'es') {
+    if (!apiKey?.trim()) {
+      throw new Error('Configura tu API Key de Groq en Ajustes para transcribir voz');
+    }
+    if (!audioBlob || !audioBlob.size) {
+      throw new Error('No se captur\u00f3 audio');
+    }
+
+    const form = new FormData();
+    form.append('file', audioBlob, 'voice.webm');
+    form.append('model', 'whisper-large-v3');
+    form.append('language', language);
+    form.append('response_format', 'json');
+
+    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey.trim()}` },
+      body: form
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Error de transcripci\u00f3n Groq (${res.status})`);
+    }
+
+    const data = await res.json();
+    const text = (data.text || '').trim();
+    if (!text) throw new Error('No se entendi\u00f3 el audio. Intenta de nuevo.');
+    return text;
+  },
+
+  async callAgent(prompt, settings, provider = 'auto', temperature = 0.2, maxTokens = 3072) {
+    const geminiKey = settings.geminiApiKey?.trim();
+    const groqKey = settings.groqApiKey?.trim();
+
+    if (provider === 'gemini') {
+      if (!geminiKey) throw new Error('Configura Gemini en Ajustes');
+      return this.callGemini(prompt, geminiKey, 0, temperature, 0, maxTokens);
+    }
+    if (provider === 'groq') {
+      if (!groqKey) throw new Error('Configura Groq en Ajustes');
+      return this.callGroq(prompt, groqKey, 0, temperature, 0, maxTokens);
+    }
+    return this.callAI(prompt, settings, temperature, maxTokens);
+  },
+
   async callGroq(prompt, apiKey, modelIndex = 0, temperature = 0.7, retryCount = 0, maxTokens = 2048) {
     if (modelIndex >= this.GROQ_MODELS.length) {
       throw new Error('Todos los modelos Groq est\u00e1n saturados. Espera 30 segundos o cambia a Gemini en Ajustes.');
@@ -3754,6 +3821,11 @@ const Agent = {
   recognition: null,
   pendingPlan: null,
   floatingOpen: false,
+  audioDevices: [],
+  _mediaRecorder: null,
+  _mediaStream: null,
+  _mediaChunks: [],
+  PREFS_KEY: 'creatorhub_agent_prefs',
 
   STATUSES: ['ideas', 'script', 'production', 'published'],
   STATUS_LABELS: {
@@ -3775,6 +3847,160 @@ const Agent = {
   init() {
     this.ensureFloatingUi();
     this.initSpeech();
+    this.refreshAudioDevices().catch(() => {});
+  },
+
+  getPrefs() {
+    try {
+      const raw = localStorage.getItem(this.PREFS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return {
+        voiceEngine: parsed.voiceEngine || 'auto',
+        aiProvider: parsed.aiProvider || 'auto',
+        audioDeviceId: parsed.audioDeviceId || ''
+      };
+    } catch {
+      return { voiceEngine: 'auto', aiProvider: 'auto', audioDeviceId: '' };
+    }
+  },
+
+  savePrefs(partial) {
+    const next = { ...this.getPrefs(), ...partial };
+    localStorage.setItem(this.PREFS_KEY, JSON.stringify(next));
+    return next;
+  },
+
+  browserSpeechSupported() {
+    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  },
+
+  groqVoiceSupported() {
+    return !!Storage.getWorkspaceSettings().groqApiKey?.trim() && !!navigator.mediaDevices?.getUserMedia;
+  },
+
+  voiceSupported() {
+    return this.browserSpeechSupported() || this.groqVoiceSupported();
+  },
+
+  getResolvedVoiceEngine() {
+    const prefs = this.getPrefs();
+    if (prefs.voiceEngine === 'browser') {
+      return this.browserSpeechSupported() ? 'browser' : (this.groqVoiceSupported() ? 'groq' : null);
+    }
+    if (prefs.voiceEngine === 'groq') {
+      return this.groqVoiceSupported() ? 'groq' : (this.browserSpeechSupported() ? 'browser' : null);
+    }
+    if (this.groqVoiceSupported()) return 'groq';
+    if (this.browserSpeechSupported()) return 'browser';
+    return null;
+  },
+
+  getResolvedAiProvider() {
+    const prefs = this.getPrefs();
+    const settings = Storage.getWorkspaceSettings();
+    if (prefs.aiProvider === 'gemini') return settings.geminiApiKey ? 'gemini' : 'auto';
+    if (prefs.aiProvider === 'groq') return settings.groqApiKey ? 'groq' : 'auto';
+    return 'auto';
+  },
+
+  async refreshAudioDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    try {
+      if (navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+      }
+    } catch (_) {}
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    this.audioDevices = devices.filter(d => d.kind === 'audioinput');
+    this.populateAudioDeviceSelects();
+    return this.audioDevices;
+  },
+
+  populateAudioDeviceSelects() {
+    document.querySelectorAll('.agent-audio-device').forEach(select => {
+      const prefs = this.getPrefs();
+      const current = select.value || prefs.audioDeviceId || '';
+      const options = [
+        '<option value="">Micr\u00f3fono predeterminado</option>',
+        ...this.audioDevices.map((d, i) => {
+          const label = d.label || `Micr\u00f3fono ${i + 1}`;
+          return `<option value="${this.escapeAttr(d.deviceId)}" ${d.deviceId === current ? 'selected' : ''}>${this.escape(label)}</option>`;
+        })
+      ];
+      select.innerHTML = options.join('');
+    });
+  },
+
+  voiceSettingsHtml(suffix = '') {
+    const prefs = this.getPrefs();
+    const id = (name) => `${name}${suffix}`;
+    const engine = this.getResolvedVoiceEngine();
+    const hint = engine === 'groq'
+      ? 'Voz v\u00eda Groq Whisper \u2014 funciona en Firefox, Edge y Chrome.'
+      : engine === 'browser'
+        ? 'Voz del navegador \u2014 mejor en Chrome/Edge.'
+        : 'Configura Groq en Ajustes o usa Chrome para voz del navegador.';
+
+    return `
+      <div class="agent-voice-settings ${suffix ? '' : 'agent-voice-settings-page'}">
+        <div class="agent-voice-field">
+          <label for="${id('agent-voice-engine')}">Motor de voz</label>
+          <select id="${id('agent-voice-engine')}" class="agent-voice-engine">
+            <option value="auto" ${prefs.voiceEngine === 'auto' ? 'selected' : ''}>Autom\u00e1tico</option>
+            <option value="groq" ${prefs.voiceEngine === 'groq' ? 'selected' : ''}>Groq Whisper</option>
+            <option value="browser" ${prefs.voiceEngine === 'browser' ? 'selected' : ''}>Navegador</option>
+          </select>
+        </div>
+        <div class="agent-voice-field">
+          <label for="${id('agent-ai-provider')}">IA del asistente</label>
+          <select id="${id('agent-ai-provider')}" class="agent-ai-provider">
+            <option value="auto" ${prefs.aiProvider === 'auto' ? 'selected' : ''}>Autom\u00e1tico</option>
+            <option value="gemini" ${prefs.aiProvider === 'gemini' ? 'selected' : ''}>Gemini</option>
+            <option value="groq" ${prefs.aiProvider === 'groq' ? 'selected' : ''}>Groq</option>
+          </select>
+        </div>
+        <div class="agent-voice-field" style="grid-column:1/-1">
+          <label for="${id('agent-audio-device')}">Micr\u00f3fono</label>
+          <select id="${id('agent-audio-device')}" class="agent-audio-device">
+            <option value="">Micr\u00f3fono predeterminado</option>
+          </select>
+        </div>
+        <p class="agent-voice-hint">${hint}</p>
+      </div>
+    `;
+  },
+
+  bindVoiceSettings(suffix = '') {
+    const id = (name) => document.getElementById(`${name}${suffix}`);
+    const engine = id('agent-voice-engine');
+    const provider = id('agent-ai-provider');
+    const device = id('agent-audio-device');
+
+    engine?.addEventListener('change', () => {
+      this.savePrefs({ voiceEngine: engine.value });
+      this.updateVoiceHints();
+    });
+    provider?.addEventListener('change', () => {
+      this.savePrefs({ aiProvider: provider.value });
+    });
+    device?.addEventListener('change', () => {
+      this.savePrefs({ audioDeviceId: device.value });
+    });
+
+    this.populateAudioDeviceSelects();
+    if (device && this.getPrefs().audioDeviceId) {
+      device.value = this.getPrefs().audioDeviceId;
+    }
+  },
+
+  updateVoiceHints() {
+    const hint = this.getResolvedVoiceEngine() === 'groq'
+      ? 'Voz v\u00eda Groq Whisper \u2014 funciona en Firefox, Edge y Chrome.'
+      : this.getResolvedVoiceEngine() === 'browser'
+        ? 'Voz del navegador \u2014 mejor en Chrome/Edge.'
+        : 'Configura Groq en Ajustes o usa Chrome para voz del navegador.';
+    document.querySelectorAll('.agent-voice-hint').forEach(el => { el.textContent = hint; });
   },
 
   canUse() {
@@ -3818,6 +4044,7 @@ const Agent = {
       </div>
       <div class="agent-messages" id="agent-messages-float"></div>
       <div class="agent-suggestions" id="agent-suggestions-float"></div>
+      ${this.voiceSettingsHtml('-float')}
       <div class="agent-input-row">
         <button type="button" class="agent-mic-btn" id="agent-mic-float" title="Hablar">\u{1f3a4}</button>
         <textarea id="agent-input-float" rows="1" placeholder="P\u00eddeme algo\u2026 ej: crea un proyecto en Ideas"></textarea>
@@ -3837,8 +4064,9 @@ const Agent = {
       App.navigate('agent');
     });
     panel.querySelector('#agent-send-float')?.addEventListener('click', () => this.submitFromInput('float'));
-    panel.querySelector('#agent-mic-float')?.addEventListener('click', () => this.toggleVoice('float'));
+    panel.querySelector('#agent-mic-float')?.addEventListener('click', () => { this.toggleVoice('float'); });
     panel.querySelector('#agent-undo-float')?.addEventListener('click', () => this.undo());
+    this.bindVoiceSettings('-float');
 
     const input = panel.querySelector('#agent-input-float');
     input?.addEventListener('keydown', (e) => {
@@ -3859,6 +4087,7 @@ const Agent = {
       this.renderMessages('float');
       this.renderSuggestions('float');
       this.updateUndoButton();
+      this.refreshAudioDevices().catch(() => {});
       document.getElementById('agent-input-float')?.focus();
     }
   },
@@ -3867,7 +4096,7 @@ const Agent = {
     this.floatingOpen = false;
     document.getElementById('agent-panel')?.classList.add('hidden');
     document.getElementById('agent-panel')?.setAttribute('aria-hidden', 'true');
-    this.stopVoice();
+    this.stopVoice('float');
   },
 
   initSpeech() {
@@ -3910,23 +4139,32 @@ const Agent = {
     };
   },
 
-  speechSupported() {
-    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-  },
-
-  toggleVoice(mode = 'page') {
-    if (!this.speechSupported()) {
-      App.showToast('Tu navegador no soporta reconocimiento de voz. Usa Chrome.', 'error');
+  async toggleVoice(mode = 'page') {
+    const engine = this.getResolvedVoiceEngine();
+    if (!engine) {
+      App.showToast('Configura Groq en Ajustes o usa un navegador compatible con voz', 'error');
       return;
     }
     if (this.isListening) {
-      this.stopVoice();
+      await this.stopVoice(mode);
       return;
     }
     this._voiceMode = mode;
+    if (engine === 'groq') {
+      await this.startGroqRecording(mode);
+    } else {
+      this.startBrowserVoice(mode);
+    }
+  },
+
+  startBrowserVoice(mode) {
+    if (!this.recognition) {
+      App.showToast('Voz del navegador no disponible. Cambia a Groq Whisper.', 'error');
+      return;
+    }
     this.isListening = true;
     this.updateMicButtons();
-    this.setStatus(mode, 'Escuchando\u2026 habla ahora');
+    this.setStatus(mode, 'Escuchando (navegador)\u2026');
     try {
       this.recognition.start();
     } catch (e) {
@@ -3936,10 +4174,73 @@ const Agent = {
     }
   },
 
-  stopVoice() {
+  async startGroqRecording(mode) {
+    try {
+      const prefs = this.getPrefs();
+      const audioConstraints = prefs.audioDeviceId
+        ? { deviceId: { exact: prefs.audioDeviceId } }
+        : true;
+
+      this._mediaStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      this._mediaChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
+      this._mediaRecorder = new MediaRecorder(this._mediaStream, { mimeType });
+      this._mediaRecorder.ondataavailable = (e) => {
+        if (e.data?.size) this._mediaChunks.push(e.data);
+      };
+      this._mediaRecorder.start();
+      this.isListening = true;
+      this.updateMicButtons();
+      this.setStatus(mode, 'Grabando\u2026 pulsa \u23f9 para transcribir');
+    } catch (e) {
+      this.isListening = false;
+      this.updateMicButtons();
+      App.showToast(e.name === 'NotAllowedError' ? 'Permiso de micr\u00f3fono denegado' : e.message, 'error');
+    }
+  },
+
+  async stopGroqRecording(mode) {
+    if (!this._mediaRecorder || this._mediaRecorder.state === 'inactive') return;
+
+    return new Promise((resolve) => {
+      this._mediaRecorder.onstop = async () => {
+        this._mediaStream?.getTracks().forEach(t => t.stop());
+        this._mediaStream = null;
+        this.isListening = false;
+        this.updateMicButtons();
+
+        const blob = new Blob(this._mediaChunks, { type: this._mediaRecorder.mimeType || 'audio/webm' });
+        this._mediaChunks = [];
+        const input = document.getElementById(mode === 'float' ? 'agent-input-float' : 'agent-input');
+
+        try {
+          this.setStatus(mode, 'Transcribiendo con Groq\u2026');
+          const settings = Storage.getWorkspaceSettings();
+          const text = await AI.transcribeAudio(blob, settings.groqApiKey);
+          if (input) input.value = text;
+          this.setStatus(mode, 'Voz transcrita');
+          resolve(text);
+        } catch (e) {
+          this.setStatus(mode, '');
+          App.showToast(AI.formatError(e), 'error');
+          resolve('');
+        }
+      };
+      this._mediaRecorder.stop();
+    });
+  },
+
+  async stopVoice(mode = this._voiceMode || 'page') {
+    const engine = this.getResolvedVoiceEngine();
+    if (engine === 'groq' && this._mediaRecorder?.state === 'recording') {
+      await this.stopGroqRecording(mode);
+      return;
+    }
     if (this.recognition && this.isListening) {
       try { this.recognition.stop(); } catch (_) {}
     }
+    this._mediaStream?.getTracks().forEach(t => t.stop());
+    this._mediaStream = null;
     this.isListening = false;
     this.updateMicButtons();
   },
@@ -4141,7 +4442,7 @@ REGLAS:
       const convo = recent.map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`).join('\n');
       const prompt = `${this.buildSystemPrompt()}\n\nHISTORIAL RECIENTE:\n${convo}\n\nNUEVA INSTRUCCI\u00d3N DEL USUARIO:\n${text}`;
 
-      const raw = await AI.callAI(prompt, settings, 0.2, 3072);
+      const raw = await AI.callAgent(prompt, settings, this.getResolvedAiProvider(), 0.2, 3072);
       const plan = this.parseAIResponse(raw);
 
       if (plan.confirm && plan.actions.some(a => this.actionNeedsConfirm(a.type))) {
@@ -4518,9 +4819,9 @@ REGLAS:
       return;
     }
 
-    const speechNote = this.speechSupported()
-      ? '\u{1f3a4} Micr\u00f3fono disponible \u2014 pulsa para dictar'
-      : '\u26a0\ufe0f Voz no soportada en este navegador (usa Chrome)';
+    const speechNote = this.voiceSupported()
+      ? '\u{1f3a4} Voz disponible \u2014 elige micr\u00f3fono, motor (Groq/Navegador) e IA abajo'
+      : '\u26a0\ufe0f Configura Groq en Ajustes para usar voz en cualquier navegador';
 
     container.innerHTML = `
       <div class="agent-page">
@@ -4538,6 +4839,7 @@ REGLAS:
           <div class="agent-chat-panel">
             <div class="agent-messages" id="agent-messages"></div>
             <div class="agent-suggestions" id="agent-suggestions"></div>
+            ${this.voiceSettingsHtml('')}
             <div class="agent-input-row agent-input-row-page">
               <button type="button" class="agent-mic-btn" id="agent-mic" title="Hablar">\u{1f3a4}</button>
               <textarea id="agent-input" rows="2" placeholder="Ej: Crea un proyecto Review del micr\u00f3fono en Ideas y a\u00f1ade tarea grabar intro"></textarea>
@@ -4555,6 +4857,8 @@ REGLAS:
               <li>Res\u00famenes y listados del hub</li>
               <li>Navegar entre secciones</li>
               <li>\u00d3rdenes compuestas en un solo mensaje</li>
+              <li>Voz con Groq Whisper (cualquier navegador)</li>
+              <li>Cambiar micr\u00f3fono, motor de voz e IA</li>
               <li>Deshacer la \u00faltima acci\u00f3n</li>
             </ul>
             <h3 style="margin-top:20px">Columnas Kanban</h3>
@@ -4569,6 +4873,8 @@ REGLAS:
     this.renderMessages('page');
     this.renderSuggestions('page');
     this.updateUndoButton();
+    this.bindVoiceSettings('');
+    this.refreshAudioDevices().catch(() => {});
 
     document.getElementById('agent-send')?.addEventListener('click', () => this.submitFromInput('page'));
     document.getElementById('agent-mic')?.addEventListener('click', () => this.toggleVoice('page'));
