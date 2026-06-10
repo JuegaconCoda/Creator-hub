@@ -325,6 +325,141 @@ body {
 .toast.success { border-left: 3px solid var(--success); }
 .toast.error { border-left: 3px solid var(--accent); }
 
+/* ===== AI AGENT ===== */
+.agent-fab {
+  position: fixed; bottom: 24px; left: 24px; z-index: 1900;
+  width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  box-shadow: 0 8px 32px rgba(255, 68, 68, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform var(--transition), box-shadow var(--transition);
+}
+.agent-fab:hover { transform: scale(1.06); box-shadow: 0 12px 40px rgba(255, 68, 68, 0.55); }
+.agent-fab.hidden, .auth-page .agent-fab, .auth-page .agent-panel { display: none !important; }
+.agent-fab-icon { font-size: 26px; line-height: 1; }
+
+.agent-panel {
+  position: fixed; bottom: 92px; left: 24px; z-index: 1899;
+  width: min(420px, calc(100vw - 48px)); max-height: min(560px, calc(100vh - 120px));
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden;
+}
+.agent-panel.hidden { display: none !important; }
+
+.agent-panel-header {
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;
+}
+.agent-panel-header strong { display: block; font-size: 14px; }
+.agent-panel-sub { font-size: 11px; color: var(--text-muted); }
+.agent-panel-header-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+.agent-messages {
+  flex: 1; overflow-y: auto; padding: 12px 16px; min-height: 200px; max-height: 320px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.agent-page .agent-messages { max-height: 420px; min-height: 320px; }
+
+.agent-welcome { text-align: center; padding: 24px 12px; color: var(--text-muted); }
+.agent-welcome-icon { font-size: 40px; margin-bottom: 12px; }
+.agent-welcome h3 { color: var(--text-secondary); font-size: 16px; margin-bottom: 8px; }
+.agent-welcome p { font-size: 13px; line-height: 1.6; }
+
+.agent-msg { display: flex; flex-direction: column; max-width: 92%; }
+.agent-msg.user { align-self: flex-end; align-items: flex-end; }
+.agent-msg.assistant { align-self: flex-start; }
+.agent-msg-bubble {
+  padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.agent-msg.user .agent-msg-bubble {
+  background: var(--accent-soft); border: 1px solid rgba(255, 68, 68, 0.3); color: var(--text-primary);
+  border-bottom-right-radius: 4px;
+}
+.agent-msg.assistant .agent-msg-bubble {
+  background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+.agent-action-log { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.agent-action-chip {
+  font-size: 10px; padding: 2px 8px; border-radius: 99px;
+  background: var(--bg-hover); color: var(--text-muted); border: 1px solid var(--border);
+}
+
+.agent-suggestions {
+  padding: 0 12px 8px; display: flex; flex-wrap: wrap; gap: 6px; max-height: 72px; overflow-y: auto;
+}
+.agent-chip {
+  font-size: 11px; padding: 5px 10px; border-radius: 99px; cursor: pointer;
+  background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-secondary);
+  font-family: inherit; transition: var(--transition);
+}
+.agent-chip:hover { border-color: var(--accent); color: var(--text-primary); }
+
+.agent-input-row {
+  display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); align-items: flex-end;
+}
+.agent-input-row textarea {
+  flex: 1; resize: none; min-height: 40px; max-height: 120px;
+  padding: 10px 12px; background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit; font-size: 13px;
+}
+.agent-input-row textarea:focus { outline: none; border-color: var(--accent); }
+
+.agent-mic-btn {
+  width: 40px; height: 40px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--bg-secondary); cursor: pointer; font-size: 18px; transition: var(--transition);
+}
+.agent-mic-btn:hover { border-color: var(--accent); }
+.agent-mic-btn.listening {
+  background: var(--accent-soft); border-color: var(--accent);
+  animation: agent-pulse 1.2s ease-in-out infinite;
+}
+@keyframes agent-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 68, 68, 0); }
+}
+
+.agent-panel-footer {
+  padding: 8px 12px; border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.agent-status { font-size: 11px; color: var(--text-muted); }
+
+.agent-page-header {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  margin-bottom: 20px; flex-wrap: wrap;
+}
+.agent-page-header h2 { font-size: 22px; margin-bottom: 6px; }
+.agent-page-sub { font-size: 13px; color: var(--text-secondary); }
+.agent-page-actions { display: flex; gap: 8px; }
+
+.agent-layout {
+  display: grid; grid-template-columns: 1fr 280px; gap: 20px; align-items: start;
+}
+@media (max-width: 900px) { .agent-layout { grid-template-columns: 1fr; } }
+
+.agent-chat-panel {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+}
+.agent-side-panel {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; font-size: 13px;
+}
+.agent-side-panel h3 { font-size: 14px; margin-bottom: 12px; color: var(--text-secondary); }
+.agent-cap-list { list-style: none; display: flex; flex-direction: column; gap: 8px; color: var(--text-muted); }
+.agent-cap-list li::before { content: '✓ '; color: var(--success); }
+.agent-columns-preview { display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-col-chip {
+  font-size: 11px; padding: 4px 10px; border-radius: 6px; border-left: 3px solid;
+  background: var(--bg-secondary);
+}
+
+@media (max-width: 768px) {
+  .agent-fab { bottom: 16px; left: 16px; width: 50px; height: 50px; }
+  .agent-panel { left: 16px; bottom: 78px; width: calc(100vw - 32px); }
+}
+
 html.has-session #auth-view { display: none !important; }
 html.has-session #app-view { display: block !important; }
 html.has-session body.auth-page { display: block; overflow: auto; }
@@ -395,6 +530,7 @@ html.has-session body.auth-page { display: block; overflow: auto; }
           <button class="nav-item" data-section="tasks"><span class="nav-icon">&#9989;</span> Tareas</button>
           <button class="nav-item" data-section="calendar"><span class="nav-icon">&#128197;</span> Calendario</button>
           <button class="nav-item" data-section="ai"><span class="nav-icon">&#129302;</span> IA Recomendaciones</button>
+          <button class="nav-item" data-section="agent"><span class="nav-icon">&#127908;</span> Asistente IA</button>
           <button class="nav-item" data-section="settings"><span class="nav-icon">&#9881;</span> Ajustes</button>
         </nav>
         <div class="sidebar-footer"><button class="nav-item" id="logout-btn"><span class="nav-icon">&#128682;</span> Cerrar sesi&oacute;n</button></div>
@@ -413,6 +549,7 @@ html.has-session body.auth-page { display: block; overflow: auto; }
           <section id="tasks-section" class="section"></section>
           <section id="calendar-section" class="section"></section>
           <section id="ai-section" class="section"></section>
+          <section id="agent-section" class="section"></section>
           <section id="settings-section" class="section"></section>
         </div>
       </main>
@@ -3607,6 +3744,868 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
 };
 
 
+const Agent = {
+  history: [],
+  undoStack: [],
+  maxHistory: 40,
+  maxUndo: 15,
+  isProcessing: false,
+  isListening: false,
+  recognition: null,
+  pendingPlan: null,
+  floatingOpen: false,
+
+  STATUSES: ['ideas', 'script', 'production', 'published'],
+  STATUS_LABELS: {
+    ideas: 'Ideas',
+    script: 'Guion',
+    production: 'Producci\u00f3n',
+    published: 'Publicado'
+  },
+
+  EXAMPLES: [
+    'Crea un proyecto "Review del micr\u00f3fono" en Ideas',
+    'Mueve "Tutorial de edici\u00f3n" a Producci\u00f3n',
+    'A\u00f1ade tarea: grabar intro para el viernes',
+    'Marca como completada la tarea de miniatura',
+    '\u00bfQu\u00e9 proyectos tengo activos?',
+    'Ve al Kanban'
+  ],
+
+  init() {
+    this.ensureFloatingUi();
+    this.initSpeech();
+  },
+
+  canUse() {
+    return Permissions.can('useAi') || Permissions.can('edit') || Permissions.can('view');
+  },
+
+  ensureFloatingUi() {
+    if (document.getElementById('agent-fab')) return;
+
+    const fab = document.createElement('button');
+    fab.id = 'agent-fab';
+    fab.className = 'agent-fab';
+    fab.type = 'button';
+    fab.title = 'Asistente IA';
+    fab.setAttribute('aria-label', 'Abrir asistente IA');
+    fab.innerHTML = '<span class="agent-fab-icon">\u{1f916}</span>';
+    fab.addEventListener('click', () => this.toggleFloating());
+
+    const panel = document.createElement('div');
+    panel.id = 'agent-panel';
+    panel.className = 'agent-panel hidden';
+    panel.setAttribute('aria-hidden', 'true');
+    panel.innerHTML = this.floatingShellHtml();
+
+    document.body.appendChild(fab);
+    document.body.appendChild(panel);
+    this.bindPanelEvents(panel);
+  },
+
+  floatingShellHtml() {
+    return `
+      <div class="agent-panel-header">
+        <div>
+          <strong>Asistente CreatorHub</strong>
+          <span class="agent-panel-sub">Texto y voz \u00b7 controla tu hub</span>
+        </div>
+        <div class="agent-panel-header-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="agent-expand-btn" title="Pantalla completa">\u26f6</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="agent-close-btn" title="Cerrar">\u2715</button>
+        </div>
+      </div>
+      <div class="agent-messages" id="agent-messages-float"></div>
+      <div class="agent-suggestions" id="agent-suggestions-float"></div>
+      <div class="agent-input-row">
+        <button type="button" class="agent-mic-btn" id="agent-mic-float" title="Hablar">\u{1f3a4}</button>
+        <textarea id="agent-input-float" rows="1" placeholder="P\u00eddeme algo\u2026 ej: crea un proyecto en Ideas"></textarea>
+        <button type="button" class="btn btn-primary btn-sm" id="agent-send-float">Enviar</button>
+      </div>
+      <div class="agent-panel-footer">
+        <button type="button" class="btn btn-ghost btn-sm" id="agent-undo-float" disabled>\u21a9 Deshacer</button>
+        <span id="agent-status-float" class="agent-status"></span>
+      </div>
+    `;
+  },
+
+  bindPanelEvents(panel) {
+    panel.querySelector('#agent-close-btn')?.addEventListener('click', () => this.closeFloating());
+    panel.querySelector('#agent-expand-btn')?.addEventListener('click', () => {
+      this.closeFloating();
+      App.navigate('agent');
+    });
+    panel.querySelector('#agent-send-float')?.addEventListener('click', () => this.submitFromInput('float'));
+    panel.querySelector('#agent-mic-float')?.addEventListener('click', () => this.toggleVoice('float'));
+    panel.querySelector('#agent-undo-float')?.addEventListener('click', () => this.undo());
+
+    const input = panel.querySelector('#agent-input-float');
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        this.submitFromInput('float');
+      }
+    });
+  },
+
+  toggleFloating() {
+    this.floatingOpen = !this.floatingOpen;
+    const panel = document.getElementById('agent-panel');
+    if (!panel) return;
+    panel.classList.toggle('hidden', !this.floatingOpen);
+    panel.setAttribute('aria-hidden', this.floatingOpen ? 'false' : 'true');
+    if (this.floatingOpen) {
+      this.renderMessages('float');
+      this.renderSuggestions('float');
+      this.updateUndoButton();
+      document.getElementById('agent-input-float')?.focus();
+    }
+  },
+
+  closeFloating() {
+    this.floatingOpen = false;
+    document.getElementById('agent-panel')?.classList.add('hidden');
+    document.getElementById('agent-panel')?.setAttribute('aria-hidden', 'true');
+    this.stopVoice();
+  },
+
+  initSpeech() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    this.recognition = new SpeechRecognition();
+    this.recognition.lang = 'es-ES';
+    this.recognition.continuous = false;
+    this.recognition.interimResults = true;
+    this.recognition.maxAlternatives = 1;
+
+    this.recognition.onresult = (event) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      const mode = this._voiceMode || 'page';
+      const input = document.getElementById(mode === 'float' ? 'agent-input-float' : 'agent-input');
+      if (input) input.value = transcript.trim();
+      if (event.results[event.results.length - 1]?.isFinal) {
+        this.stopVoice();
+        this.setStatus(mode, 'Voz capturada');
+      }
+    };
+
+    this.recognition.onerror = (event) => {
+      this.isListening = false;
+      this.updateMicButtons();
+      const msg = event.error === 'not-allowed'
+        ? 'Permiso de micr\u00f3fono denegado'
+        : `Error de voz: ${event.error}`;
+      this.setStatus(this._voiceMode || 'page', msg);
+      App.showToast(msg, 'error');
+    };
+
+    this.recognition.onend = () => {
+      this.isListening = false;
+      this.updateMicButtons();
+    };
+  },
+
+  speechSupported() {
+    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  },
+
+  toggleVoice(mode = 'page') {
+    if (!this.speechSupported()) {
+      App.showToast('Tu navegador no soporta reconocimiento de voz. Usa Chrome.', 'error');
+      return;
+    }
+    if (this.isListening) {
+      this.stopVoice();
+      return;
+    }
+    this._voiceMode = mode;
+    this.isListening = true;
+    this.updateMicButtons();
+    this.setStatus(mode, 'Escuchando\u2026 habla ahora');
+    try {
+      this.recognition.start();
+    } catch (e) {
+      this.isListening = false;
+      this.updateMicButtons();
+      App.showToast('No se pudo iniciar el micr\u00f3fono', 'error');
+    }
+  },
+
+  stopVoice() {
+    if (this.recognition && this.isListening) {
+      try { this.recognition.stop(); } catch (_) {}
+    }
+    this.isListening = false;
+    this.updateMicButtons();
+  },
+
+  updateMicButtons() {
+    document.querySelectorAll('.agent-mic-btn').forEach(btn => {
+      btn.classList.toggle('listening', this.isListening);
+      btn.textContent = this.isListening ? '\u23f9' : '\u{1f3a4}';
+    });
+  },
+
+  setStatus(mode, text) {
+    const el = document.getElementById(mode === 'float' ? 'agent-status-float' : 'agent-status');
+    if (el) el.textContent = text || '';
+  },
+
+  addMessage(role, content, meta = {}) {
+    this.history.push({
+      role,
+      content,
+      meta,
+      at: new Date().toISOString()
+    });
+    if (this.history.length > this.maxHistory) {
+      this.history = this.history.slice(-this.maxHistory);
+    }
+    this.renderMessages('page');
+    this.renderMessages('float');
+  },
+
+  renderMessages(mode) {
+    const container = document.getElementById(mode === 'float' ? 'agent-messages-float' : 'agent-messages');
+    if (!container) return;
+
+    if (!this.history.length) {
+      container.innerHTML = `
+        <div class="agent-welcome">
+          <div class="agent-welcome-icon">\u{1f916}</div>
+          <h3>Tu copiloto de creaci\u00f3n</h3>
+          <p>Puedo crear proyectos, mover tarjetas, gestionar tareas, navegar y resumir tu hub. Escribe o usa el micr\u00f3fono.</p>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = this.history.map(msg => {
+      const isUser = msg.role === 'user';
+      const actionsHtml = msg.meta?.actions?.length
+        ? `<div class="agent-action-log">${msg.meta.actions.map(a => `<span class="agent-action-chip">${this.escape(a.summary || a.type)}</span>`).join('')}</div>`
+        : '';
+      return `
+        <div class="agent-msg ${isUser ? 'user' : 'assistant'}">
+          <div class="agent-msg-bubble">${this.escape(msg.content)}</div>
+          ${actionsHtml}
+        </div>
+      `;
+    }).join('');
+
+    container.scrollTop = container.scrollHeight;
+  },
+
+  renderSuggestions(mode) {
+    const container = document.getElementById(mode === 'float' ? 'agent-suggestions-float' : 'agent-suggestions');
+    if (!container) return;
+    container.innerHTML = this.EXAMPLES.map(ex => `
+      <button type="button" class="agent-chip" data-example="${this.escapeAttr(ex)}">${this.escape(ex)}</button>
+    `).join('');
+    container.querySelectorAll('.agent-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const inputId = mode === 'float' ? 'agent-input-float' : 'agent-input';
+        const input = document.getElementById(inputId);
+        if (input) input.value = btn.dataset.example;
+        this.submitFromInput(mode);
+      });
+    });
+  },
+
+  async submitFromInput(mode = 'page') {
+    const input = document.getElementById(mode === 'float' ? 'agent-input-float' : 'agent-input');
+    const text = input?.value?.trim();
+    if (!text || this.isProcessing) return;
+    input.value = '';
+    if (this.pendingPlan && this.handleConfirmation(text, mode)) return;
+    await this.processInstruction(text, { mode });
+  },
+
+  getWorkspaceContext() {
+    const creatorId = Auth.getActiveCreatorId();
+    const user = Auth.getCurrentUser();
+    const projects = Storage.getProjects(creatorId);
+    const tasks = Storage.getTasks(creatorId);
+    const collabs = Storage.getCollaborators(creatorId);
+
+    return {
+      user: {
+        name: user?.name,
+        role: user?.role,
+        canEdit: Permissions.can('edit'),
+        canDelete: Permissions.can('delete')
+      },
+      columns: Kanban.COLUMNS.map(c => ({ id: c.id, title: c.title })),
+      projects: projects.map(p => ({
+        id: p.id,
+        title: p.title,
+        status: p.status,
+        priority: p.priority || 'medium',
+        dueDate: p.dueDate || null,
+        category: p.category || ''
+      })),
+      tasks: tasks.map(t => ({
+        id: t.id,
+        name: t.name,
+        completed: !!t.completed,
+        dueDate: t.dueDate || null,
+        projectId: t.projectId || null,
+        projectTitle: projects.find(p => p.id === t.projectId)?.title || null
+      })),
+      stats: {
+        activeProjects: projects.filter(p => p.status !== 'published').length,
+        pendingTasks: tasks.filter(t => !t.completed).length,
+        collaborators: collabs.length
+      },
+      currentSection: App.currentSection
+    };
+  },
+
+  buildSystemPrompt() {
+    const ctx = this.getWorkspaceContext();
+    return `Eres el asistente de CreatorHub, una app de gesti\u00f3n para creadores de YouTube.
+Respondes SIEMPRE en espa\u00f1ol. Controlas proyectos (Kanban), tareas y navegaci\u00f3n.
+
+ESTADO ACTUAL DEL WORKSPACE (JSON):
+${JSON.stringify(ctx, null, 2)}
+
+ACCIONES DISPONIBLES (devuelve una o varias en "actions"):
+- create_project: { title, status?, priority?, category?, dueDate?, description? }
+  status: ideas|script|production|published
+- update_project: { projectId? o projectTitle?, title?, status?, priority?, category?, dueDate?, description? }
+- move_project: { projectId? o projectTitle?, status }
+- delete_project: { projectId? o projectTitle? } ${ctx.user.canDelete ? '' : '(NO PERMITIDO para este usuario)'}
+- create_task: { name, projectId? o projectTitle?, dueDate?, notes? }
+- update_task: { taskId? o taskName?, name?, dueDate?, notes?, projectId?, projectTitle? }
+- complete_task: { taskId? o taskName?, completed?: true|false }
+- delete_task: { taskId? o taskName? } ${ctx.user.canDelete ? '' : '(NO PERMITIDO)'}
+- navigate: { section } \u2014 dashboard|kanban|tasks|calendar|ai|settings|agent
+- summarize: {} \u2014 resumen del hub sin modificar nada
+- list_projects: { status? }
+- list_tasks: { completed?: boolean }
+- undo: {} \u2014 deshace la \u00faltima acci\u00f3n del asistente
+
+REGLAS:
+1. Responde SOLO con JSON v\u00e1lido (sin markdown), formato:
+{"reply":"mensaje al usuario","actions":[{"type":"...","params":{}}],"confirm":false}
+2. Si el usuario solo pregunta, usa summarize/list_* o reply sin actions.
+3. Para varias cosas ("crea proyecto X y 3 tareas"), devuelve varias actions en orden.
+4. Usa projectTitle/taskName para buscar si no tienes id. Si hay ambig\u00fcedad, pregunta en reply sin actions.
+5. Si falta permiso de borrado, no incluyas delete_*.
+6. confirm:true solo si la acci\u00f3n es destructiva y el usuario no fue expl\u00edcito.
+7. Nunca inventes API keys ni datos que no est\u00e9n en el contexto.`;
+  },
+
+  parseAIResponse(raw) {
+    const text = (raw || '').trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { reply: text || 'No pude procesar la respuesta.', actions: [], confirm: false };
+    }
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        reply: parsed.reply || parsed.message || 'Listo.',
+        actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+        confirm: !!parsed.confirm
+      };
+    } catch (e) {
+      return { reply: text, actions: [], confirm: false };
+    }
+  },
+
+  async processInstruction(text, options = {}) {
+    if (!this.canUse()) {
+      App.showToast('No tienes permiso para usar el asistente', 'error');
+      return;
+    }
+
+    const settings = Storage.getWorkspaceSettings();
+    if (!settings.geminiApiKey && !settings.groqApiKey) {
+      App.showToast('Configura Gemini o Groq en Ajustes', 'error');
+      return;
+    }
+
+    const mode = options.mode || 'page';
+    this.isProcessing = true;
+    this.setStatus(mode, 'Pensando\u2026');
+    this.addMessage('user', text);
+
+    try {
+      const recent = this.history.filter(m => m.role === 'user' || m.role === 'assistant').slice(-8);
+      const convo = recent.map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`).join('\n');
+      const prompt = `${this.buildSystemPrompt()}\n\nHISTORIAL RECIENTE:\n${convo}\n\nNUEVA INSTRUCCI\u00d3N DEL USUARIO:\n${text}`;
+
+      const raw = await AI.callAI(prompt, settings, 0.2, 3072);
+      const plan = this.parseAIResponse(raw);
+
+      if (plan.confirm && plan.actions.some(a => this.actionNeedsConfirm(a.type))) {
+        this.pendingPlan = plan;
+        this.addMessage('assistant', plan.reply + '\n\n\u26a0\ufe0f Confirma escribiendo: **s\u00ed, confirmar**');
+        this.setStatus(mode, 'Esperando confirmaci\u00f3n');
+        return;
+      }
+
+      await this.executePlan(plan, mode);
+    } catch (e) {
+      const msg = AI.formatError(e);
+      this.addMessage('assistant', `\u274c ${msg}`);
+      App.showToast(msg, 'error');
+    } finally {
+      this.isProcessing = false;
+      this.setStatus(mode, '');
+    }
+  },
+
+  actionNeedsConfirm(type) {
+    return type === 'delete_project' || type === 'delete_task';
+  },
+
+  async executePlan(plan, mode = 'page') {
+    const executed = [];
+    let reply = plan.reply || '';
+
+    for (const action of plan.actions || []) {
+      const type = action.type || action.action;
+      const params = action.params || action;
+      if (!type || type === 'params') continue;
+
+      if (type === 'undo') {
+        const res = this.undo();
+        executed.push({ type, summary: res.message, ok: res.success });
+        continue;
+      }
+
+      const result = await this.executeAction(type, params);
+      executed.push({ type, summary: result.message, ok: result.success });
+      if (!result.success) {
+        reply += `\n\u26a0\ufe0f ${result.message}`;
+        break;
+      }
+      if (['summarize', 'list_projects', 'list_tasks'].includes(type)) {
+        reply = result.message;
+      }
+    }
+
+    if (!plan.actions?.length && !reply) {
+      reply = 'Entendido. \u00bfQu\u00e9 m\u00e1s necesitas?';
+    }
+
+    this.addMessage('assistant', reply, { actions: executed });
+    this.updateUndoButton();
+    App.refreshCurrentSection?.();
+    if (executed.some(a => a.ok && a.type === 'navigate')) {
+      /* navigate already called */
+    } else if (executed.some(a => a.ok && a.type !== 'summarize' && a.type !== 'list_projects' && a.type !== 'list_tasks')) {
+      App.showToast('Asistente: cambios aplicados', 'success');
+    }
+  },
+
+  async executeAction(type, params) {
+    const handlers = {
+      create_project: () => this.actionCreateProject(params),
+      update_project: () => this.actionUpdateProject(params),
+      move_project: () => this.actionMoveProject(params),
+      delete_project: () => this.actionDeleteProject(params),
+      create_task: () => this.actionCreateTask(params),
+      update_task: () => this.actionUpdateTask(params),
+      complete_task: () => this.actionCompleteTask(params),
+      delete_task: () => this.actionDeleteTask(params),
+      navigate: () => this.actionNavigate(params),
+      summarize: () => this.actionSummarize(),
+      list_projects: () => this.actionListProjects(params),
+      list_tasks: () => this.actionListTasks(params)
+    };
+
+    const fn = handlers[type];
+    if (!fn) return { success: false, message: `Acci\u00f3n desconocida: ${type}` };
+    return fn();
+  },
+
+  pushUndo(label) {
+    const creatorId = Auth.getActiveCreatorId();
+    this.undoStack.push({
+      label,
+      at: new Date().toISOString(),
+      projects: JSON.parse(JSON.stringify(Storage.getProjects(creatorId))),
+      tasks: JSON.parse(JSON.stringify(Storage.getTasks(creatorId)))
+    });
+    if (this.undoStack.length > this.maxUndo) this.undoStack.shift();
+    this.updateUndoButton();
+  },
+
+  undo() {
+    const snap = this.undoStack.pop();
+    if (!snap) {
+      App.showToast('Nada que deshacer', 'error');
+      return { success: false, message: 'Nada que deshacer' };
+    }
+    const creatorId = Auth.getActiveCreatorId();
+    Storage.saveProjects(creatorId, snap.projects);
+    Storage.saveTasks(creatorId, snap.tasks);
+    Calendar.syncFromProjects();
+    Calendar.syncFromTasks();
+    App.refreshCurrentSection?.();
+    this.updateUndoButton();
+    App.showToast(`Deshecho: ${snap.label}`, 'success');
+    return { success: true, message: `Deshecho: ${snap.label}` };
+  },
+
+  updateUndoButton() {
+    const disabled = this.undoStack.length === 0;
+    document.querySelectorAll('#agent-undo, #agent-undo-float').forEach(btn => {
+      btn.disabled = disabled;
+    });
+  },
+
+  findProject(params) {
+    const projects = Kanban.getProjects();
+    if (params.projectId) return projects.find(p => p.id === params.projectId);
+    const title = (params.projectTitle || params.title || '').trim().toLowerCase();
+    if (!title) return null;
+    const matches = projects.filter(p => p.title.toLowerCase().includes(title));
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return { ambiguous: true, matches };
+    return null;
+  },
+
+  findTask(params) {
+    const tasks = Tasks.getTasks();
+    if (params.taskId) return tasks.find(t => t.id === params.taskId);
+    const name = (params.taskName || params.name || '').trim().toLowerCase();
+    if (!name) return null;
+    const matches = tasks.filter(t => t.name.toLowerCase().includes(name));
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return { ambiguous: true, matches };
+    return null;
+  },
+
+  normalizeStatus(status) {
+    const s = (status || 'ideas').toLowerCase();
+    const map = {
+      idea: 'ideas', ideas: 'ideas',
+      guion: 'script', script: 'script', gui\u00f3n: 'script',
+      produccion: 'production', producci\u00f3n: 'production', production: 'production',
+      publicado: 'published', published: 'published', done: 'published'
+    };
+    return map[s] || (this.STATUSES.includes(s) ? s : 'ideas');
+  },
+
+  actionCreateProject(params) {
+    if (!Permissions.can('edit')) return { success: false, message: 'Sin permiso de edici\u00f3n' };
+    const title = (params.title || '').trim();
+    if (!title) return { success: false, message: 'Falta el t\u00edtulo del proyecto' };
+
+    this.pushUndo(`crear proyecto "${title}"`);
+    const projects = Kanban.getProjects();
+    projects.push({
+      id: Storage.generateUuid(),
+      title,
+      description: params.description || '',
+      category: params.category || '',
+      priority: params.priority || 'medium',
+      dueDate: params.dueDate || '',
+      status: this.normalizeStatus(params.status),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    Kanban.saveProjects(projects);
+    return { success: true, message: `Proyecto "${title}" creado` };
+  },
+
+  actionUpdateProject(params) {
+    if (!Permissions.can('edit')) return { success: false, message: 'Sin permiso de edici\u00f3n' };
+    const found = this.findProject(params);
+    if (!found) return { success: false, message: 'Proyecto no encontrado' };
+    if (found.ambiguous) return { success: false, message: `Varios proyectos coinciden: ${found.matches.map(p => p.title).join(', ')}` };
+
+    this.pushUndo(`editar proyecto "${found.title}"`);
+    const projects = Kanban.getProjects();
+    const idx = projects.findIndex(p => p.id === found.id);
+    if (params.title) projects[idx].title = params.title.trim();
+    if (params.description !== undefined) projects[idx].description = params.description;
+    if (params.category !== undefined) projects[idx].category = params.category;
+    if (params.priority) projects[idx].priority = params.priority;
+    if (params.dueDate !== undefined) projects[idx].dueDate = params.dueDate;
+    if (params.status) projects[idx].status = this.normalizeStatus(params.status);
+    projects[idx].updatedAt = new Date().toISOString();
+    Kanban.saveProjects(projects);
+    return { success: true, message: `Proyecto "${projects[idx].title}" actualizado` };
+  },
+
+  actionMoveProject(params) {
+    if (!Permissions.can('edit')) return { success: false, message: 'Sin permiso de edici\u00f3n' };
+    const found = this.findProject(params);
+    if (!found) return { success: false, message: 'Proyecto no encontrado' };
+    if (found.ambiguous) return { success: false, message: 'Proyecto ambiguo, s\u00e9 m\u00e1s espec\u00edfico' };
+
+    const status = this.normalizeStatus(params.status);
+    this.pushUndo(`mover "${found.title}"`);
+    const projects = Kanban.getProjects();
+    const idx = projects.findIndex(p => p.id === found.id);
+    projects[idx].status = status;
+    projects[idx].updatedAt = new Date().toISOString();
+    Kanban.saveProjects(projects);
+    return { success: true, message: `"${found.title}" \u2192 ${this.STATUS_LABELS[status]}` };
+  },
+
+  actionDeleteProject(params) {
+    if (!Permissions.can('delete')) return { success: false, message: 'Sin permiso para eliminar' };
+    const found = this.findProject(params);
+    if (!found) return { success: false, message: 'Proyecto no encontrado' };
+    if (found.ambiguous) return { success: false, message: 'Proyecto ambiguo' };
+
+    this.pushUndo(`eliminar proyecto "${found.title}"`);
+    const projects = Kanban.getProjects().filter(p => p.id !== found.id);
+    Kanban.saveProjects(projects);
+    return { success: true, message: `Proyecto "${found.title}" eliminado` };
+  },
+
+  actionCreateTask(params) {
+    if (!Permissions.can('edit')) return { success: false, message: 'Sin permiso de edici\u00f3n' };
+    const name = (params.name || '').trim();
+    if (!name) return { success: false, message: 'Falta el nombre de la tarea' };
+
+    let projectId = params.projectId || null;
+    if (!projectId && params.projectTitle) {
+      const p = this.findProject({ projectTitle: params.projectTitle });
+      if (p && !p.ambiguous) projectId = p.id;
+    }
+
+    this.pushUndo(`crear tarea "${name}"`);
+    const tasks = Tasks.getTasks();
+    tasks.push({
+      id: Storage.generateUuid(),
+      name,
+      projectId,
+      dueDate: params.dueDate || '',
+      notes: params.notes || '',
+      completed: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    Tasks.saveTasks(tasks);
+    return { success: true, message: `Tarea "${name}" creada` };
+  },
+
+  actionUpdateTask(params) {
+    if (!Permissions.can('edit')) return { success: false, message: 'Sin permiso de edici\u00f3n' };
+    const found = this.findTask(params);
+    if (!found) return { success: false, message: 'Tarea no encontrada' };
+    if (found.ambiguous) return { success: false, message: 'Varias tareas coinciden' };
+
+    this.pushUndo(`editar tarea "${found.name}"`);
+    const tasks = Tasks.getTasks();
+    const idx = tasks.findIndex(t => t.id === found.id);
+    if (params.name) tasks[idx].name = params.name.trim();
+    if (params.notes !== undefined) tasks[idx].notes = params.notes;
+    if (params.dueDate !== undefined) tasks[idx].dueDate = params.dueDate;
+    if (params.projectId || params.projectTitle) {
+      const p = params.projectId
+        ? Kanban.getProjects().find(p => p.id === params.projectId)
+        : this.findProject({ projectTitle: params.projectTitle });
+      if (p && !p.ambiguous) tasks[idx].projectId = p.id;
+    }
+    tasks[idx].updatedAt = new Date().toISOString();
+    Tasks.saveTasks(tasks);
+    return { success: true, message: `Tarea "${tasks[idx].name}" actualizada` };
+  },
+
+  actionCompleteTask(params) {
+    if (!Permissions.can('edit')) return { success: false, message: 'Sin permiso de edici\u00f3n' };
+    const found = this.findTask(params);
+    if (!found) return { success: false, message: 'Tarea no encontrada' };
+    if (found.ambiguous) return { success: false, message: 'Tarea ambigua' };
+
+    const completed = params.completed !== false;
+    this.pushUndo(completed ? `completar "${found.name}"` : `reabrir "${found.name}"`);
+    const tasks = Tasks.getTasks();
+    const idx = tasks.findIndex(t => t.id === found.id);
+    tasks[idx].completed = completed;
+    tasks[idx].completedAt = completed ? new Date().toISOString() : null;
+    tasks[idx].updatedAt = new Date().toISOString();
+    Tasks.saveTasks(tasks);
+    return { success: true, message: completed ? `Tarea completada` : `Tarea reabierta` };
+  },
+
+  actionDeleteTask(params) {
+    if (!Permissions.can('delete')) return { success: false, message: 'Sin permiso para eliminar' };
+    const found = this.findTask(params);
+    if (!found) return { success: false, message: 'Tarea no encontrada' };
+    if (found.ambiguous) return { success: false, message: 'Tarea ambigua' };
+
+    this.pushUndo(`eliminar tarea "${found.name}"`);
+    const tasks = Tasks.getTasks().filter(t => t.id !== found.id);
+    Tasks.saveTasks(tasks);
+    return { success: true, message: `Tarea eliminada` };
+  },
+
+  actionNavigate(params) {
+    const section = (params.section || 'dashboard').toLowerCase();
+    const allowed = ['dashboard', 'kanban', 'tasks', 'calendar', 'ai', 'settings', 'agent'];
+    if (!allowed.includes(section)) return { success: false, message: `Secci\u00f3n inv\u00e1lida: ${section}` };
+    App.navigate(section);
+    return { success: true, message: `Navegando a ${section}` };
+  },
+
+  actionSummarize() {
+    const ctx = this.getWorkspaceContext();
+    const lines = [
+      `\u{1f4ca} ${ctx.stats.activeProjects} proyectos activos, ${ctx.stats.pendingTasks} tareas pendientes`,
+      `\u{1f465} ${ctx.stats.collaborators} colaboradores`
+    ];
+    if (ctx.projects.length) {
+      lines.push('\nProyectos:');
+      ctx.projects.slice(0, 12).forEach(p => {
+        lines.push(`\u2022 [${this.STATUS_LABELS[p.status] || p.status}] ${p.title}`);
+      });
+    }
+    return { success: true, message: lines.join('\n'), data: lines.join('\n') };
+  },
+
+  actionListProjects(params) {
+    let projects = Kanban.getProjects();
+    if (params.status) projects = projects.filter(p => p.status === this.normalizeStatus(params.status));
+    if (!projects.length) return { success: true, message: 'No hay proyectos' };
+    const list = projects.map(p => `\u2022 ${p.title} (${this.STATUS_LABELS[p.status]})`).join('\n');
+    return { success: true, message: list };
+  },
+
+  actionListTasks(params) {
+    let tasks = Tasks.getTasks();
+    if (params.completed === true) tasks = tasks.filter(t => t.completed);
+    if (params.completed === false) tasks = tasks.filter(t => !t.completed);
+    if (!tasks.length) return { success: true, message: 'No hay tareas' };
+    const list = tasks.map(t => `\u2022 ${t.completed ? '\u2705' : '\u2b1c'} ${t.name}`).join('\n');
+    return { success: true, message: list };
+  },
+
+  handleConfirmation(text, mode = 'page') {
+    const normalized = text.trim().toLowerCase();
+    if (!this.pendingPlan) return false;
+    if (['s\u00ed', 'si', 'confirmar', 'yes', 'ok'].some(k => normalized.includes(k))) {
+      const plan = this.pendingPlan;
+      this.pendingPlan = null;
+      this.addMessage('user', text);
+      this.isProcessing = true;
+      this.executePlan({ ...plan, confirm: false }, mode)
+        .finally(() => { this.isProcessing = false; this.setStatus(mode, ''); });
+      return true;
+    }
+    if (['no', 'cancelar'].includes(normalized)) {
+      this.pendingPlan = null;
+      this.addMessage('user', text);
+      this.addMessage('assistant', 'Acci\u00f3n cancelada.');
+      return true;
+    }
+    return false;
+  },
+
+  render(container) {
+    if (!this.canUse()) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">\u{1f512}</div>
+          <h3>Sin acceso al asistente</h3>
+          <p>Tu rol no tiene permisos para usar el asistente IA.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const speechNote = this.speechSupported()
+      ? '\u{1f3a4} Micr\u00f3fono disponible \u2014 pulsa para dictar'
+      : '\u26a0\ufe0f Voz no soportada en este navegador (usa Chrome)';
+
+    container.innerHTML = `
+      <div class="agent-page">
+        <div class="agent-page-header">
+          <div>
+            <h2>\u{1f916} Asistente IA</h2>
+            <p class="agent-page-sub">Controla proyectos, tareas y navegaci\u00f3n con texto o voz. ${speechNote}</p>
+          </div>
+          <div class="agent-page-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="agent-undo" disabled>\u21a9 Deshacer</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="agent-clear">Limpiar chat</button>
+          </div>
+        </div>
+        <div class="agent-layout">
+          <div class="agent-chat-panel">
+            <div class="agent-messages" id="agent-messages"></div>
+            <div class="agent-suggestions" id="agent-suggestions"></div>
+            <div class="agent-input-row agent-input-row-page">
+              <button type="button" class="agent-mic-btn" id="agent-mic" title="Hablar">\u{1f3a4}</button>
+              <textarea id="agent-input" rows="2" placeholder="Ej: Crea un proyecto Review del micr\u00f3fono en Ideas y a\u00f1ade tarea grabar intro"></textarea>
+              <button type="button" class="btn btn-primary" id="agent-send">Enviar</button>
+            </div>
+            <div class="agent-panel-footer">
+              <span id="agent-status" class="agent-status"></span>
+            </div>
+          </div>
+          <aside class="agent-side-panel">
+            <h3>Capacidades</h3>
+            <ul class="agent-cap-list">
+              <li>Crear, mover y editar proyectos en el Kanban</li>
+              <li>Crear, completar y gestionar tareas</li>
+              <li>Res\u00famenes y listados del hub</li>
+              <li>Navegar entre secciones</li>
+              <li>\u00d3rdenes compuestas en un solo mensaje</li>
+              <li>Deshacer la \u00faltima acci\u00f3n</li>
+            </ul>
+            <h3 style="margin-top:20px">Columnas Kanban</h3>
+            <div class="agent-columns-preview">
+              ${Kanban.COLUMNS.map(c => `<span class="agent-col-chip" style="border-color:${c.color}">${c.title}</span>`).join('')}
+            </div>
+          </aside>
+        </div>
+      </div>
+    `;
+
+    this.renderMessages('page');
+    this.renderSuggestions('page');
+    this.updateUndoButton();
+
+    document.getElementById('agent-send')?.addEventListener('click', () => this.submitFromInput('page'));
+    document.getElementById('agent-mic')?.addEventListener('click', () => this.toggleVoice('page'));
+    document.getElementById('agent-undo')?.addEventListener('click', () => this.undo());
+    document.getElementById('agent-clear')?.addEventListener('click', () => {
+      this.history = [];
+      this.pendingPlan = null;
+      this.renderMessages('page');
+      this.renderMessages('float');
+    });
+
+    const input = document.getElementById('agent-input');
+    input?.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (this.pendingPlan && this.handleConfirmation(text, 'page')) {
+          input.value = '';
+          return;
+        }
+        this.submitFromInput('page');
+      }
+    });
+  },
+
+  escape(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+  },
+
+  escapeAttr(str) {
+    return (str || '').replace(/"/g, '&quot;');
+  }
+};
+
+
 const App = {
   currentSection: 'dashboard',
 
@@ -3618,6 +4617,7 @@ const App = {
     this.setupModal();
     this.setupLogout();
     this.setupWorkspaceSync();
+    Agent.init();
     Calendar.handleGoogleCallback();
     this.navigate('dashboard');
   },
@@ -3647,6 +4647,7 @@ const App = {
       case 'tasks': Tasks.render(document.getElementById('tasks-section')); break;
       case 'calendar': Calendar.render(document.getElementById('calendar-section')); break;
       case 'ai': AI.render(document.getElementById('ai-section')); break;
+      case 'agent': break;
       case 'settings': this.renderSettings(); break;
     }
   },
@@ -3712,11 +4713,12 @@ const App = {
       tasks: 'Tareas',
       calendar: 'Calendario',
       ai: 'IA Recomendaciones',
+      agent: 'Asistente IA',
       settings: 'Ajustes'
     };
     document.getElementById('page-title').textContent = titles[section] || section;
 
-    if (Cloud.enabled && section !== 'settings') {
+    if (Cloud.enabled && section !== 'settings' && section !== 'agent') {
       const creatorId = Auth.getActiveCreatorId();
       if (creatorId) {
         Cloud.syncNow(creatorId, { refreshUi: true }).catch(console.error);
@@ -3729,6 +4731,7 @@ const App = {
       case 'tasks': Tasks.render(document.getElementById('tasks-section')); break;
       case 'calendar': Calendar.render(document.getElementById('calendar-section')); break;
       case 'ai': AI.render(document.getElementById('ai-section')); break;
+      case 'agent': Agent.render(document.getElementById('agent-section')); break;
       case 'settings': this.renderSettingsWithSync(); break;
     }
   },
@@ -4447,6 +5450,8 @@ const Router = {
   appInitialized: false,
   showAuth() {
     Cloud.stopAutoSync();
+    Agent.closeFloating?.();
+    document.getElementById('agent-fab')?.classList.add('hidden');
     const auth = document.getElementById('auth-view');
     const app = document.getElementById('app-view');
     auth.classList.remove('hidden');
@@ -4473,8 +5478,10 @@ const Router = {
       App.setupNavigation();
       App.setupLogout();
       App.setupWorkspaceSync();
+      Agent.init();
       this.appInitialized = true;
     }
+    document.getElementById('agent-fab')?.classList.remove('hidden');
     if (Cloud.enabled) {
       try { await Cloud.pullAllForCurrentUser(); Cloud.startAutoSync(); } catch (e) { console.warn(e); }
     }
