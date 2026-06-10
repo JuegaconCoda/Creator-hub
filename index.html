@@ -476,15 +476,33 @@ const Storage = {
   },
 
   cacheUser(user) {
-    const users = this.getUsers().filter(u => u.id !== user.id);
-    users.push({ ...user, password: user.password || '' });
-    this.saveUsers(users);
+    const users = this.getUsers();
+    const existing = users.find(u => u.id === user.id);
+    const merged = {
+      ...existing,
+      ...user,
+      password: user.password || existing?.password || '',
+      creatorCode: user.creatorCode || existing?.creatorCode || null,
+      passwordHash: user.passwordHash || existing?.passwordHash
+    };
+    const next = users.filter(u => u.id !== user.id);
+    next.push(merged);
+    this.saveUsers(next);
   },
 
   mergeUsersFromCloud(cloudUsers) {
     const local = this.getUsers();
     const map = new Map(local.map(u => [u.id, u]));
-    cloudUsers.forEach(u => map.set(u.id, { ...map.get(u.id), ...u }));
+    cloudUsers.forEach(u => {
+      const prev = map.get(u.id) || {};
+      map.set(u.id, {
+        ...prev,
+        ...u,
+        password: prev.password || '',
+        creatorCode: u.creatorCode || prev.creatorCode || null,
+        passwordHash: u.passwordHash || prev.passwordHash
+      });
+    });
     this.saveUsers([...map.values()]);
   },
 
@@ -777,6 +795,14 @@ const Cloud = {
     if (!this.enabled) throw new Error('La nube no est\u00e1 configurada');
     if (user.role !== 'creator') throw new Error('Solo creadores pueden subir su cuenta');
 
+    user = Auth.ensureCreatorCode(user);
+    const users = Storage.getUsers();
+    const idx = users.findIndex(u => u.id === user.id);
+    if (idx >= 0) {
+      users[idx].creatorCode = user.creatorCode;
+      Storage.saveUsers(users);
+    }
+
     const passwordHash = user.passwordHash || await this.hashPassword(user.password || '');
     if (!passwordHash && !user.password) {
       throw new Error('No se puede subir la cuenta sin contrase\u00f1a. Vuelve a iniciar sesi\u00f3n.');
@@ -814,9 +840,14 @@ const Cloud = {
   async registerUser(user) {
     const username = user.username;
     const state = await this.loadState(true);
+    const exists = !!state.users[username];
 
-    if (state.users[username]) {
-      return { success: false, message: 'Este nombre de usuario ya existe' };
+    if (exists && user.role === 'collaborator') {
+      return { success: false, message: 'Este nombre de usuario ya existe en la nube' };
+    }
+
+    if (user.role === 'creator') {
+      user = Auth.ensureCreatorCode(user);
     }
 
     if (user.role === 'collaborator') {
@@ -848,12 +879,14 @@ const Cloud = {
 
     if (user.role === 'creator') {
       if (record.creatorCode) state.codes[record.creatorCode] = username;
-      state.workspaces[user.id] = {
-        projects: [],
-        tasks: [],
-        collaborators: [],
-        updatedAt: new Date().toISOString()
-      };
+      if (!state.workspaces[user.id]) {
+        state.workspaces[user.id] = {
+          projects: Storage.getProjects(user.id),
+          tasks: Storage.getTasks(user.id),
+          collaborators: Storage.getCollaborators(user.id),
+          updatedAt: new Date().toISOString()
+        };
+      }
     }
 
     if (user.role === 'collaborator') {
@@ -885,13 +918,21 @@ const Cloud = {
       const ok = await this.verifyPassword(password, user.passwordHash);
       if (!ok) return { success: false, message: 'Usuario o contrase\u00f1a incorrectos' };
 
-      Storage.cacheUser(user);
+      const local = Storage.findUserByUsername(username);
+      const merged = {
+        ...local,
+        ...user,
+        password: local?.password || '',
+        creatorCode: user.creatorCode || local?.creatorCode || null
+      };
+      Storage.cacheUser(merged);
+      Auth.ensureCreatorCode(merged);
       try {
-        await this.pullWorkspaceForUser(user);
+        await this.pullWorkspaceForUser(merged);
       } catch (e) {
         console.warn('[Cloud] pullWorkspace on login:', e);
       }
-      return { success: true, message: '\u00a1Bienvenido!', user };
+      return { success: true, message: '\u00a1Bienvenido!', user: merged };
     } catch (e) {
       console.error('[Cloud] loginUser:', e);
       return { success: false, message: this.formatError(e), offline: true };
@@ -1068,11 +1109,26 @@ const Auth = {
     return Storage.getSession();
   },
 
+  ensureCreatorCode(user) {
+    if (!user || user.role !== 'creator') return user;
+    if (user.creatorCode) return user;
+
+    user.creatorCode = Storage.generateId('CR');
+    const users = Storage.getUsers();
+    const idx = users.findIndex(u => u.id === user.id);
+    if (idx >= 0) {
+      users[idx].creatorCode = user.creatorCode;
+      Storage.saveUsers(users);
+    }
+    return user;
+  },
+
   getCurrentUser() {
     const session = this.getSession();
     if (!session) return null;
     const users = Storage.getUsers();
-    return users.find(u => u.id === session.userId) || null;
+    const user = users.find(u => u.id === session.userId) || null;
+    return user ? this.ensureCreatorCode({ ...user }) : null;
   },
 
   async register(data) {
@@ -1115,6 +1171,10 @@ const Auth = {
 
     users.push(user);
     Storage.saveUsers(users);
+
+    if (data.role === 'creator') {
+      this.ensureCreatorCode(user);
+    }
 
     if (data.role === 'collaborator') {
       const creator = users.find(u => u.creatorCode === creatorCode);
@@ -1168,7 +1228,15 @@ const Auth = {
       if (Cloud.enabled) {
         const result = await Cloud.loginUser(check.username, password);
         if (result.success) {
-          Storage.setSession({ userId: result.user.id, role: result.user.role, username: result.user.username });
+          const merged = {
+            ...localUser,
+            ...result.user,
+            password: localUser?.password || '',
+            creatorCode: result.user.creatorCode || localUser?.creatorCode || null
+          };
+          Storage.cacheUser(merged);
+          this.ensureCreatorCode(merged);
+          Storage.setSession({ userId: merged.id, role: merged.role, username: merged.username });
           Cloud.startAutoSync();
           return { success: true, message: '\u00a1Bienvenido de vuelta!' };
         }
@@ -2911,7 +2979,8 @@ const App = {
   },
 
   renderSettings() {
-    const user = Auth.getCurrentUser();
+    let user = Auth.getCurrentUser();
+    if (user?.role === 'creator') user = Auth.ensureCreatorCode(user);
     const settings = Storage.getSettings(user.id);
     const isCreator = user.role === 'creator';
 
@@ -2939,9 +3008,10 @@ const App = {
               Comparte este c\u00f3digo con tus colaboradores para que se conecten contigo.
             </p>
             <div class="creator-id-box">
-              <span class="creator-id-code">${user.creatorCode}</span>
+              <span class="creator-id-code" id="creator-id-display">${user.creatorCode || 'Generando...'}</span>
               <button class="btn btn-secondary btn-sm" id="copy-id-btn">Copiar</button>
             </div>
+            ${!user.creatorCode ? '<p style="font-size:12px;color:var(--accent);margin-top:8px">Tu ID se generar\u00e1 autom\u00e1ticamente. Recarga Ajustes si no aparece.</p>' : ''}
             <div class="form-group">
               <label>Canal de YouTube</label>
               <input type="text" id="settings-youtube" value="${user.youtubeChannel || ''}" placeholder="https://youtube.com/@tucanal">
