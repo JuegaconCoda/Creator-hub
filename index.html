@@ -329,13 +329,12 @@ body {
           </div>
           <button type="submit" class="btn btn-primary btn-full">Crear cuenta</button>
         </form>
-        <details id="auth-firebase-section" class="auth-firebase-panel" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);font-weight:600">Firebase (colaboraci&oacute;n remota)</summary>
-          <p style="font-size:12px;color:var(--text-muted);margin:10px 0">Pega la misma config que el creador. Obligatorio para colaboradores; opcional para creadores que ya tienen cuenta local.</p>
-          <div class="form-group"><label for="auth-fb-api-key">API Key</label><input type="text" id="auth-fb-api-key" placeholder="AIza..." autocomplete="off"></div>
-          <div class="form-group"><label for="auth-fb-project-id">Project ID</label><input type="text" id="auth-fb-project-id" placeholder="mi-proyecto" autocomplete="off"></div>
-          <div class="form-group"><label for="auth-fb-app-id">App ID</label><input type="text" id="auth-fb-app-id" placeholder="1:123:web:abc" autocomplete="off"></div>
-          <p id="auth-firebase-status" class="form-hint" style="margin-top:4px"></p>
+        <details id="auth-cloud-section" class="auth-firebase-panel" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);font-weight:600">Nube JSONBin (colaboraci&oacute;n remota)</summary>
+          <p style="font-size:12px;color:var(--text-muted);margin:10px 0">Pide al creador su API Key y Bin ID (Ajustes &rarr; Sincronizaci&oacute;n). Gratis en <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a>.</p>
+          <div class="form-group"><label for="auth-cloud-api-key">API Key JSONBin</label><input type="password" id="auth-cloud-api-key" placeholder="X-Master-Key" autocomplete="off"></div>
+          <div class="form-group"><label for="auth-cloud-bin-id">Bin ID</label><input type="text" id="auth-cloud-bin-id" placeholder="65a1b2c3..." autocomplete="off"></div>
+          <p id="auth-cloud-status" class="form-hint" style="margin-top:4px"></p>
         </details>
         <div id="auth-message" class="auth-message hidden"></div>
       </div>
@@ -385,8 +384,6 @@ body {
   </div>
   <div class="toast" id="toast"></div>
 
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
   <script>
 const AppConfig = {
   get origin() {
@@ -445,7 +442,7 @@ const Storage = {
     COLLABS: 'creatorhub_collaborators',
     SETTINGS: 'creatorhub_settings',
     AI_CACHE: 'creatorhub_ai_cache',
-    FIREBASE: 'creatorhub_firebase'
+    CLOUD: 'creatorhub_cloud'
   },
 
   get(key) {
@@ -589,13 +586,13 @@ const Storage = {
 
 
 const Cloud = {
-  db: null,
   enabled: false,
   syncTimer: null,
-  _settingsApplied: false,
+  _stateCache: null,
+  _stateCacheAt: 0,
 
   getConfig() {
-    return Storage.get(Storage.KEYS.FIREBASE) || null;
+    return Storage.get(Storage.KEYS.CLOUD) || null;
   },
 
   saveConfig(config) {
@@ -604,46 +601,17 @@ const Cloud = {
 
   isConfigured() {
     const c = this.getConfig();
-    return !!(c?.apiKey && c?.projectId && c?.appId);
-  },
-
-  parseConfigFromText(text) {
-    const raw = (text || '').trim();
-    if (!raw) return null;
-
-    try {
-      const json = JSON.parse(raw);
-      if (json.apiKey && json.projectId && json.appId) return json;
-      if (json.firebase?.apiKey) return json.firebase;
-    } catch (_) {}
-
-    const pick = (key) => {
-      const m = raw.match(new RegExp(`${key}\\s*[:=]\\s*["'\`]([^"'\`]+)["'\`]`));
-      return m ? m[1].trim() : '';
-    };
-
-    const config = {
-      apiKey: pick('apiKey'),
-      projectId: pick('projectId'),
-      appId: pick('appId'),
-      authDomain: pick('authDomain'),
-      storageBucket: pick('storageBucket'),
-      messagingSenderId: pick('messagingSenderId')
-    };
-
-    return (config.apiKey && config.projectId && config.appId) ? config : null;
+    return !!(c?.apiKey && c?.binId);
   },
 
   applyConfig(config) {
-    if (!config?.apiKey || !config?.projectId || !config?.appId) return false;
-    Storage.set(Storage.KEYS.FIREBASE, {
+    if (!config?.apiKey?.trim()) return false;
+    const record = {
+      provider: 'jsonbin',
       apiKey: config.apiKey.trim(),
-      projectId: config.projectId.trim(),
-      appId: config.appId.trim(),
-      authDomain: config.authDomain?.trim() || '',
-      storageBucket: config.storageBucket?.trim() || '',
-      messagingSenderId: config.messagingSenderId?.trim() || ''
-    });
+      binId: (config.binId || '').trim()
+    };
+    Storage.set(Storage.KEYS.CLOUD, record);
     this.init();
     return this.enabled;
   },
@@ -656,116 +624,112 @@ const Cloud = {
 
     const urls = [];
     if (typeof AppConfig !== 'undefined') {
-      urls.push(AppConfig.publicUrl + 'firebase-config.json');
+      urls.push(AppConfig.publicUrl + 'sync-config.json');
     }
-    urls.push('firebase-config.json');
+    urls.push('sync-config.json');
 
     for (const url of urls) {
       try {
         const res = await fetch(url, { cache: 'no-store' });
         if (!res.ok) continue;
         const config = await res.json();
-        if (this.applyConfig(config)) return true;
+        if (config.apiKey && (config.binId || config.provider === 'jsonbin')) {
+          if (this.applyConfig(config)) return true;
+        }
       } catch (e) {
-        console.warn('[Cloud] firebase-config.json no disponible en', url);
+        console.warn('[Cloud] sync-config.json no disponible en', url);
       }
     }
 
     return false;
   },
 
-  isOfflineError(err) {
-    const msg = String(err?.message || err?.code || err || '').toLowerCase();
-    return msg.includes('offline') || msg.includes('unavailable') || msg.includes('network');
+  init() {
+    this.enabled = this.isConfigured();
+    this._stateCache = null;
   },
 
   formatError(err) {
-    if (this.isOfflineError(err)) {
-      return 'Sin conexi\u00f3n con Firebase. Revisa internet, que Firestore est\u00e9 activo en tu proyecto y que el dominio github.io est\u00e9 autorizado.';
-    }
     const msg = String(err?.message || err || '');
-    if (msg.includes('permission') || msg.includes('PERMISSION_DENIED')) {
-      return 'Firestore bloque\u00f3 la lectura. En Firebase Console \u2192 Firestore \u2192 Reglas, permite lectura/escritura temporalmente.';
+    if (msg.includes('401') || msg.toLowerCase().includes('unauthorized')) {
+      return 'API Key de JSONBin incorrecta. C\u00f3piala de jsonbin.io \u2192 API Keys.';
     }
-    return msg || 'Error de conexi\u00f3n con Firebase';
+    if (msg.includes('404')) {
+      return 'Bin ID no encontrado. El creador debe pulsar "Crear nube" o compartir el Bin ID correcto.';
+    }
+    if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
+      return 'Sin conexi\u00f3n a internet o JSONBin no responde. Revisa tu red.';
+    }
+    return msg || 'Error de sincronizaci\u00f3n';
   },
 
-  async ensureNetwork() {
-    if (!this.db) return;
-    try {
-      await this.db.enableNetwork();
-    } catch (e) {
-      console.warn('[Cloud] enableNetwork:', e);
-    }
+  emptyState() {
+    return { users: {}, codes: {}, workspaces: {}, updatedAt: null };
   },
 
-  async safeGet(docRef) {
-    await this.ensureNetwork();
-    try {
-      return await docRef.get({ source: 'server' });
-    } catch (e) {
-      if (!this.isOfflineError(e)) throw e;
+  async jsonbinRequest(path, method, body) {
+    const c = this.getConfig();
+    const res = await fetch(`https://api.jsonbin.io/v3${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Master-Key': c.apiKey
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+
+    if (!res.ok) {
+      let detail = '';
       try {
-        await this.db.disableNetwork();
-        await this.db.enableNetwork();
-        await new Promise(r => setTimeout(r, 600));
-        return await docRef.get({ source: 'server' });
-      } catch (e2) {
-        throw e2;
-      }
+        const json = await res.json();
+        detail = json.message || json.error || '';
+      } catch (_) {}
+      throw new Error(detail || `JSONBin error ${res.status}`);
     }
+
+    if (res.status === 204) return {};
+    return res.json();
   },
 
-  async safeQuery(query) {
-    await this.ensureNetwork();
-    try {
-      return await query.get({ source: 'server' });
-    } catch (e) {
-      if (!this.isOfflineError(e)) throw e;
-      await this.db.disableNetwork();
-      await this.db.enableNetwork();
-      await new Promise(r => setTimeout(r, 600));
-      return await query.get({ source: 'server' });
+  async loadState(force) {
+    if (!force && this._stateCache && Date.now() - this._stateCacheAt < 4000) {
+      return this._stateCache;
     }
+
+    const c = this.getConfig();
+    if (!c.binId) {
+      this._stateCache = this.emptyState();
+      this._stateCacheAt = Date.now();
+      return this._stateCache;
+    }
+
+    const res = await this.jsonbinRequest(`/b/${c.binId}/latest`, 'GET');
+    const state = res.record && typeof res.record === 'object' ? res.record : this.emptyState();
+    if (!state.users) state.users = {};
+    if (!state.codes) state.codes = {};
+    if (!state.workspaces) state.workspaces = {};
+    this._stateCache = state;
+    this._stateCacheAt = Date.now();
+    return state;
   },
 
-  async safeSet(docRef, data, options) {
-    await this.ensureNetwork();
-    return docRef.set(data, options);
-  },
+  async saveState(state) {
+    const c = this.getConfig();
+    state.updatedAt = new Date().toISOString();
 
-  init() {
-    this.enabled = false;
-    this.db = null;
-    if (!this.isConfigured() || typeof firebase === 'undefined') return;
-
-    try {
-      const c = this.getConfig();
-      if (!firebase.apps.length) {
-        firebase.initializeApp({
-          apiKey: c.apiKey,
-          authDomain: c.authDomain || `${c.projectId}.firebaseapp.com`,
-          projectId: c.projectId,
-          storageBucket: c.storageBucket || `${c.projectId}.appspot.com`,
-          messagingSenderId: c.messagingSenderId || '',
-          appId: c.appId
-        });
-      }
-
-      this.db = firebase.firestore();
-
-      if (!this._settingsApplied) {
-        this.db.settings({
-          experimentalForceLongPolling: true,
-          merge: true
-        });
-        this._settingsApplied = true;
-      }
-
-      this.enabled = true;
-    } catch (e) {
-      console.error('[Cloud] Init error:', e);
+    if (!c.binId) {
+      const created = await this.jsonbinRequest('/b', 'POST', state);
+      c.binId = created.metadata?.id || created.id;
+      if (!c.binId) throw new Error('No se pudo crear la nube en JSONBin');
+      Storage.set(Storage.KEYS.CLOUD, c);
+      this.init();
+    } else {
+      await this.jsonbinRequest(`/b/${c.binId}`, 'PUT', state);
     }
+
+    this._stateCache = state;
+    this._stateCacheAt = Date.now();
+    return c.binId;
   },
 
   async hashPassword(password) {
@@ -777,71 +741,48 @@ const Cloud = {
     return (await this.hashPassword(password)) === hash;
   },
 
-  usersRef() {
-    return this.db.collection('creatorhub_users');
-  },
-
-  workspaceRef(creatorId) {
-    return this.db.collection('creatorhub_workspaces').doc(creatorId);
+  userFromState(state, username) {
+    return state.users[(username || '').toLowerCase()] || null;
   },
 
   async getUserByUsername(username) {
-    const doc = await this.safeGet(this.usersRef().doc(username));
-    return doc.exists ? doc.data() : null;
-  },
-
-  codesRef() {
-    return this.db.collection('creatorhub_codes');
+    const state = await this.loadState();
+    return this.userFromState(state, username);
   },
 
   normalizeCode(code) {
     return Auth.normalizeCreatorCode(code);
   },
 
-  async saveCreatorCodeMapping(user) {
-    if (!user.creatorCode) return;
-    await this.safeSet(this.codesRef().doc(user.creatorCode), {
-      userId: user.id,
-      username: user.username,
-      name: user.name || user.username,
-      youtubeChannel: user.youtubeChannel || '',
-      updatedAt: new Date().toISOString()
-    });
-  },
-
-  async getUserByCreatorCode(code) {
+  creatorFromCode(state, code) {
     const normalized = this.normalizeCode(code);
     if (!normalized) return null;
 
-    const codeDoc = await this.safeGet(this.codesRef().doc(normalized));
-    if (codeDoc.exists) {
-      const mapping = codeDoc.data();
-      const userDoc = await this.safeGet(this.usersRef().doc(mapping.username));
-      if (userDoc.exists) return userDoc.data();
-      return {
-        id: mapping.userId,
-        username: mapping.username,
-        name: mapping.name,
-        creatorCode: normalized,
-        role: 'creator',
-        youtubeChannel: mapping.youtubeChannel || ''
-      };
+    const username = state.codes[normalized];
+    if (username) {
+      const user = state.users[username];
+      if (user) return user;
     }
 
-    const snap = await this.safeQuery(this.usersRef().where('creatorCode', '==', normalized).limit(1));
-    if (snap.empty) return null;
-    return snap.docs[0].data();
+    return Object.values(state.users).find(u => u.role === 'creator' && u.creatorCode === normalized) || null;
+  },
+
+  async getUserByCreatorCode(code) {
+    const state = await this.loadState();
+    const creator = this.creatorFromCode(state, code);
+    return creator || null;
   },
 
   async uploadCreatorAccount(user) {
-    if (!this.enabled) throw new Error('Firebase no est\u00e1 conectado');
+    if (!this.enabled) throw new Error('La nube no est\u00e1 configurada');
     if (user.role !== 'creator') throw new Error('Solo creadores pueden subir su cuenta');
 
     const passwordHash = user.passwordHash || await this.hashPassword(user.password || '');
     if (!passwordHash && !user.password) {
-      throw new Error('No se puede subir la cuenta sin contrase\u00f1a. Vuelve a iniciar sesi\u00f3n en el navegador del creador.');
+      throw new Error('No se puede subir la cuenta sin contrase\u00f1a. Vuelve a iniciar sesi\u00f3n.');
     }
 
+    const state = await this.loadState(true);
     const record = {
       id: user.id,
       username: user.username,
@@ -855,31 +796,36 @@ const Cloud = {
       createdAt: user.createdAt || new Date().toISOString()
     };
 
-    await this.safeSet(this.usersRef().doc(user.username), record, { merge: true });
-    await this.saveCreatorCodeMapping(record);
-
-    await this.safeSet(this.workspaceRef(user.id), {
+    state.users[user.username] = record;
+    if (record.creatorCode) {
+      state.codes[record.creatorCode] = user.username;
+    }
+    state.workspaces[user.id] = {
       projects: Storage.getProjects(user.id),
       tasks: Storage.getTasks(user.id),
       collaborators: Storage.getCollaborators(user.id),
       updatedAt: new Date().toISOString()
-    }, { merge: true });
+    };
 
+    await this.saveState(state);
     return record;
   },
 
   async registerUser(user) {
     const username = user.username;
-    const existing = await this.getUserByUsername(username);
-    if (existing) return { success: false, message: 'Este nombre de usuario ya existe' };
+    const state = await this.loadState(true);
+
+    if (state.users[username]) {
+      return { success: false, message: 'Este nombre de usuario ya existe' };
+    }
 
     if (user.role === 'collaborator') {
       const creatorCode = user.activeCreatorId || user.creatorId;
-      const creator = await this.getUserByCreatorCode(creatorCode);
+      const creator = this.creatorFromCode(state, creatorCode);
       if (!creator) {
         return {
           success: false,
-          message: 'ID de creador no encontrado en la nube. El creador debe ir a Ajustes \u2192 Firebase \u2192 "Subir mi cuenta a la nube".'
+          message: 'ID de creador no encontrado. El creador debe pulsar "Subir mi cuenta a la nube" en Ajustes.'
         };
       }
     }
@@ -898,37 +844,35 @@ const Cloud = {
       createdAt: user.createdAt
     };
 
-    await this.safeSet(this.usersRef().doc(username), record);
+    state.users[username] = record;
 
     if (user.role === 'creator') {
-      await this.saveCreatorCodeMapping(record);
-      await this.safeSet(this.workspaceRef(user.id), {
+      if (record.creatorCode) state.codes[record.creatorCode] = username;
+      state.workspaces[user.id] = {
         projects: [],
         tasks: [],
         collaborators: [],
         updatedAt: new Date().toISOString()
-      });
+      };
     }
 
     if (user.role === 'collaborator') {
       const creatorCode = user.activeCreatorId || user.creatorId;
-      const creator = await this.getUserByCreatorCode(creatorCode);
-      const ws = await this.safeGet(this.workspaceRef(creator.id));
-      const collabs = ws.exists ? (ws.data().collaborators || []) : [];
-      collabs.push({
+      const creator = this.creatorFromCode(state, creatorCode);
+      const ws = state.workspaces[creator.id] || { projects: [], tasks: [], collaborators: [] };
+      ws.collaborators = ws.collaborators || [];
+      ws.collaborators.push({
         userId: user.id,
         username: user.username,
         name: user.name || user.username,
         permissions: { canEdit: true, canDelete: false, canManageProjects: false, canManageCollabs: false },
         joinedAt: new Date().toISOString()
       });
-      await this.safeSet(this.workspaceRef(creator.id), {
-        ...(ws.data() || {}),
-        collaborators: collabs,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
+      ws.updatedAt = new Date().toISOString();
+      state.workspaces[creator.id] = ws;
     }
 
+    await this.saveState(state);
     Storage.cacheUser(record);
     return { success: true, message: '\u00a1Cuenta creada en la nube!', user: record };
   },
@@ -950,65 +894,71 @@ const Cloud = {
       return { success: true, message: '\u00a1Bienvenido!', user };
     } catch (e) {
       console.error('[Cloud] loginUser:', e);
-      return { success: false, message: this.formatError(e), offline: this.isOfflineError(e) };
+      return { success: false, message: this.formatError(e), offline: true };
     }
   },
 
   async pullWorkspaceForUser(user) {
+    const state = await this.loadState(true);
     const creatorId = user.role === 'creator'
       ? user.id
-      : (await this.getUserByCreatorCode(user.activeCreatorId))?.id;
+      : this.creatorFromCode(state, user.activeCreatorId)?.id;
 
-    if (!creatorId) return;
-
-    const doc = await this.safeGet(this.workspaceRef(creatorId));
-    if (!doc.exists) return;
-
-    const data = doc.data();
-    Storage.mergeWorkspace(creatorId, data);
+    if (!creatorId || !state.workspaces[creatorId]) return;
+    Storage.mergeWorkspace(creatorId, state.workspaces[creatorId]);
   },
 
   async pullAllForCurrentUser() {
     const user = Auth.getCurrentUser();
     if (!user || !this.enabled) return;
 
+    const state = await this.loadState(true);
+
     if (user.role === 'collaborator') {
       for (const code of user.linkedCreators || []) {
-        const creator = await this.getUserByCreatorCode(code);
-        if (creator) await this.pullWorkspace(creator.id);
+        const creator = this.creatorFromCode(state, code);
+        if (creator && state.workspaces[creator.id]) {
+          Storage.mergeWorkspace(creator.id, state.workspaces[creator.id]);
+        }
       }
-    } else {
-      await this.pullWorkspace(user.id);
+    } else if (state.workspaces[user.id]) {
+      Storage.mergeWorkspace(user.id, state.workspaces[user.id]);
     }
 
-    const snap = await this.safeQuery(this.usersRef());
-    const users = snap.docs.map(d => d.data());
-    Storage.mergeUsersFromCloud(users);
+    Storage.mergeUsersFromCloud(Object.values(state.users));
   },
 
   async pullWorkspace(creatorId) {
-    const doc = await this.safeGet(this.workspaceRef(creatorId));
-    if (doc.exists) Storage.mergeWorkspace(creatorId, doc.data());
+    const state = await this.loadState(true);
+    if (state.workspaces[creatorId]) {
+      Storage.mergeWorkspace(creatorId, state.workspaces[creatorId]);
+    }
   },
 
   async pushWorkspace(creatorId) {
     if (!this.enabled) return;
-    await this.safeSet(this.workspaceRef(creatorId), {
+    const state = await this.loadState(true);
+    state.workspaces[creatorId] = {
       projects: Storage.getProjects(creatorId),
       tasks: Storage.getTasks(creatorId),
       collaborators: Storage.getCollaborators(creatorId),
       updatedAt: new Date().toISOString()
-    }, { merge: true });
+    };
+    await this.saveState(state);
   },
 
   async pushUserUpdate(user) {
     if (!this.enabled) return;
-    await this.safeSet(this.usersRef().doc(user.username), {
+    const state = await this.loadState(true);
+    if (!state.users[user.username]) return;
+    state.users[user.username] = {
+      ...state.users[user.username],
       youtubeChannel: user.youtubeChannel,
       linkedCreators: user.linkedCreators,
       activeCreatorId: user.activeCreatorId,
       name: user.name
-    }, { merge: true });
+    };
+    await this.saveState(state);
   },
 
   startAutoSync() {
@@ -1017,7 +967,7 @@ const Cloud = {
     this.syncTimer = setInterval(() => {
       const creatorId = Auth.getActiveCreatorId();
       if (creatorId) this.pushWorkspace(creatorId).catch(console.error);
-    }, 20000);
+    }, 25000);
   },
 
   stopAutoSync() {
@@ -1025,31 +975,26 @@ const Cloud = {
     this.syncTimer = null;
   },
 
-  validateConfigFields(config) {
-    const c = config || this.getConfig();
-    if (!c?.apiKey?.startsWith('AIza')) {
-      return 'API Key incorrecta. Debe empezar con AIza... (c\u00f3piala del bloque firebaseConfig, no uses la key de YouTube).';
+  async testConnection() {
+    if (!this.getConfig()?.apiKey) {
+      throw new Error('Pega tu API Key de JSONBin (gratis en jsonbin.io)');
     }
-    if (!c?.projectId || c.projectId.includes(' ')) {
-      return 'Project ID incorrecto. Es el id del proyecto (ej: creator-hub-123), no el nombre visible.';
+    this.init();
+    const c = this.getConfig();
+    if (c.binId) {
+      await this.loadState(true);
+      return true;
     }
-    if (!c?.appId?.includes(':web:')) {
-      return 'App ID incorrecto. Debe ser como 1:123456789:web:abcdef \u2014 cr\u00e9ala registrando una app Web (</>) en Firebase.';
-    }
-    return null;
+    const testState = { users: {}, codes: {}, workspaces: {}, ping: Date.now() };
+    await this.jsonbinRequest('/b', 'POST', testState);
+    return true;
   },
 
-  async testConnection() {
-    const config = this.getConfig();
-    const fieldErr = this.validateConfigFields(config);
-    if (fieldErr) throw new Error(fieldErr);
-    if (!this.isConfigured()) throw new Error('Completa la configuraci\u00f3n de Firebase');
-    this.init();
-    if (!this.enabled) throw new Error('No se pudo iniciar Firebase. Recarga la p\u00e1gina e int\u00e9ntalo de nuevo.');
-    await this.safeSet(this.db.collection('creatorhub_ping').doc('test'), { t: Date.now() });
-    const doc = await this.safeGet(this.db.collection('creatorhub_ping').doc('test'));
-    if (!doc.exists) throw new Error('Firestore no respondi\u00f3. \u00bfCreaste la base de datos Firestore?');
-    return true;
+  async createCloudBin() {
+    const state = this.emptyState();
+    state.ping = Date.now();
+    const binId = await this.saveState(state);
+    return binId;
   }
 };
 
@@ -1095,7 +1040,7 @@ const Auth = {
           console.error('[Auth] Error buscando creador en la nube:', e);
           return {
             creator: null, code,
-            error: 'Error al conectar con Firebase. Revisa la configuraci\u00f3n (API Key, Project ID, App ID) y que Firestore est\u00e9 activo.'
+            error: 'Error al conectar con la nube. Revisa API Key y Bin ID de JSONBin (Ajustes \u2192 Sincronizaci\u00f3n).'
           };
         }
         if (creator) {
@@ -1104,18 +1049,18 @@ const Auth = {
         }
         return {
           creator: null, code,
-          error: `Creador "${code}" no encontrado en la nube. El creador debe iniciar sesi\u00f3n en ${typeof AppConfig !== 'undefined' ? AppConfig.publicUrl : 'la web'}, ir a Ajustes \u2192 Firebase y pulsar "Subir mi cuenta a la nube".`
+          error: `Creador "${code}" no encontrado en la nube. El creador debe ir a Ajustes \u2192 Sincronizaci\u00f3n y pulsar "Subir mi cuenta a la nube".`
         };
       }
       return {
         creator: null, code,
-        error: 'Firebase configurado pero no conecta. Revisa API Key, Project ID y App ID (deben ser los mismos que el creador).'
+        error: 'Nube configurada pero no conecta. Revisa API Key y Bin ID (deben ser los mismos que el creador).'
       };
     }
 
     return {
       creator: null, code,
-      error: 'Para unirte desde otro dispositivo, pega la configuraci\u00f3n de Firebase abajo (la misma que el creador) o pide al creador que suba firebase-config.json al repositorio.'
+      error: 'Para unirte desde otro dispositivo, pega la API Key y Bin ID del creador abajo (o pide que suba sync-config.json al repo de GitHub).'
     };
   },
 
@@ -2971,7 +2916,7 @@ const App = {
         <div class="ai-card" style="margin-bottom:20px;border-color:var(--success)">
           <h3>\u{1f310} Publicado en GitHub Pages</h3>
           <p style="font-size:13px;color:var(--text-secondary)">URL: <code style="color:var(--accent)">${publicUrl}</code></p>
-          <p style="font-size:12px;color:var(--text-muted);margin-top:8px">Comparte esta URL con tus colaboradores. Configura Firebase para sincronizar entre dispositivos.</p>
+          <p style="font-size:12px;color:var(--text-muted);margin-top:8px">Comparte esta URL con tus colaboradores. Configura JSONBin en Ajustes para sincronizar entre dispositivos.</p>
         </div>
       ` : AppConfig?.isLocalFile?.() ? `
         <div class="ai-card" style="margin-bottom:20px;border-color:var(--warning)">
@@ -3050,45 +2995,40 @@ const App = {
         </div>
 
         <div class="settings-card">
-          <h3>\u2601\ufe0f Sincronizaci\u00f3n en la nube (Firebase)</h3>
+          <h3>\u2601\ufe0f Sincronizaci\u00f3n en la nube (JSONBin \u2014 gratis)</h3>
+          <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
+            Alternativa simple a Firebase. Solo necesitas una cuenta gratis en
+            <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a>
+            \u2014 sin reglas ni Firestore.
+          </p>
           <details style="margin-bottom:12px;font-size:12px;color:var(--text-secondary)">
-            <summary style="cursor:pointer;color:var(--accent);font-weight:600">Gu\u00eda paso a paso (l\u00e9ela si no conecta)</summary>
+            <summary style="cursor:pointer;color:var(--accent);font-weight:600">Gu\u00eda en 3 pasos</summary>
             <ol style="margin:10px 0 0 18px;line-height:1.7">
-              <li>Entra a <a href="https://console.firebase.google.com" target="_blank" style="color:var(--accent)">console.firebase.google.com</a> \u2192 <strong>Crear proyecto</strong></li>
-              <li>Men\u00fa <strong>Build \u2192 Firestore Database</strong> \u2192 <strong>Crear base de datos</strong> \u2192 modo prueba \u2192 regi\u00f3n cercana \u2192 Activar</li>
-              <li>Pesta\u00f1a <strong>Reglas</strong> \u2192 pega: <code style="font-size:10px">allow read, write: if true;</code> \u2192 Publicar</li>
-              <li>Icono <strong>\u2699</strong> arriba \u2192 <strong>Configuraci\u00f3n del proyecto</strong> \u2192 baja a <strong>Tus apps</strong></li>
-              <li>Si no hay app web: clic en <strong>&lt;/&gt;</strong> (Web) \u2192 nombre "CreatorHub" \u2192 Registrar app</li>
-              <li>Copia el bloque <code>firebaseConfig</code> completo y p\u00e9galo abajo en "Pegar config"</li>
-              <li><strong>No uses</strong> la API de YouTube ni Gemini aqu\u00ed \u2014 solo los datos del SDK web de Firebase</li>
+              <li>Crea cuenta en <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a> (gratis)</li>
+              <li>Ve a <strong>API Keys</strong> \u2192 copia tu <strong>X-Master-Key</strong></li>
+              <li>P\u00e9gala abajo \u2192 <strong>Crear nube</strong> \u2192 <strong>Subir mi cuenta a la nube</strong></li>
+              <li>Comparte con colaboradores: <strong>API Key + Bin ID</strong> (o sube <code>sync-config.json</code> a GitHub)</li>
             </ol>
           </details>
           <div class="form-group">
-            <label>Pegar config de Firebase (recomendado)</label>
-            <textarea id="fb-paste-config" rows="4" placeholder='Pega aqu\u00ed el bloque firebaseConfig = { apiKey: "...", projectId: "...", appId: "..." }' style="width:100%;font-family:monospace;font-size:11px"></textarea>
-            <button type="button" class="btn btn-secondary btn-sm" id="fb-parse-btn" style="margin-top:6px">Rellenar campos desde el bloque pegado</button>
+            <label>API Key de JSONBin (X-Master-Key)</label>
+            <input type="password" id="cloud-api-key" value="${(Storage.get(Storage.KEYS.CLOUD) || {}).apiKey || ''}" placeholder="$2a$10... o tu master key">
           </div>
           <div class="form-group">
-            <label>API Key <small style="color:var(--text-muted)">(empieza con AIza...)</small></label>
-            <input type="text" id="fb-api-key" value="${(Storage.get(Storage.KEYS.FIREBASE) || {}).apiKey || ''}" placeholder="AIza...">
-          </div>
-          <div class="form-group">
-            <label>Project ID <small style="color:var(--text-muted)">(ej: creator-hub-abc123)</small></label>
-            <input type="text" id="fb-project-id" value="${(Storage.get(Storage.KEYS.FIREBASE) || {}).projectId || ''}" placeholder="mi-proyecto">
-          </div>
-          <div class="form-group">
-            <label>App ID <small style="color:var(--text-muted)">(empieza con 1:...:web:...)</small></label>
-            <input type="text" id="fb-app-id" value="${(Storage.get(Storage.KEYS.FIREBASE) || {}).appId || ''}" placeholder="1:123456789:web:abcdef123456">
+            <label>Bin ID <small style="color:var(--text-muted)">(se crea autom\u00e1ticamente)</small></label>
+            <input type="text" id="cloud-bin-id" value="${(Storage.get(Storage.KEYS.CLOUD) || {}).binId || ''}" placeholder="65a1b2c3d4e5f6789..." readonly>
+            ${isCreator ? '<button type="button" class="btn btn-secondary btn-sm" id="copy-bin-id-btn" style="margin-top:6px">Copiar Bin ID para colaboradores</button>' : ''}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-primary btn-sm" id="save-firebase-btn">Guardar Firebase</button>
-            <button class="btn btn-secondary btn-sm" id="test-firebase-btn">Probar conexi\u00f3n</button>
+            <button class="btn btn-primary btn-sm" id="save-cloud-btn">Guardar</button>
+            <button class="btn btn-secondary btn-sm" id="test-cloud-btn">Probar conexi\u00f3n</button>
+            ${isCreator ? '<button class="btn btn-secondary btn-sm" id="create-cloud-btn">Crear nube</button>' : ''}
             ${isCreator ? '<button class="btn btn-secondary btn-sm" id="upload-cloud-btn">Subir mi cuenta a la nube</button>' : ''}
-            ${isCreator ? '<button class="btn btn-secondary btn-sm" id="export-firebase-btn">Descargar firebase-config.json</button>' : ''}
+            ${isCreator ? '<button class="btn btn-secondary btn-sm" id="export-sync-btn">Descargar sync-config.json</button>' : ''}
           </div>
-          ${isCreator ? '<p style="font-size:11px;color:var(--text-muted);margin-top:8px">Sube <code>firebase-config.json</code> a tu repo de GitHub para que los colaboradores no tengan que pegar Firebase manualmente.</p>' : ''}
-          <div id="firebase-status" style="margin-top:10px;font-size:13px;color:var(--text-muted)">
-            ${Cloud.enabled ? '\u2705 Nube activa \u2014 los colaboradores remotos pueden sincronizar' : '\u26a0\ufe0f Solo modo local \u2014 configura Firebase para colaboraci\u00f3n remota'}
+          ${isCreator ? '<p style="font-size:11px;color:var(--text-muted);margin-top:8px">Los colaboradores necesitan la misma API Key y Bin ID. Sube <code>sync-config.json</code> al repo para cargarlo autom\u00e1ticamente.</p>' : ''}
+          <div id="cloud-status" style="margin-top:10px;font-size:13px;color:var(--text-muted)">
+            ${Cloud.enabled ? '\u2705 Nube activa \u2014 los colaboradores remotos pueden sincronizar' : '\u26a0\ufe0f Solo modo local \u2014 configura JSONBin para colaboraci\u00f3n remota'}
           </div>
         </div>
 
@@ -3178,48 +3118,59 @@ const App = {
       this.showToast('Google Calendar configurado', 'success');
     });
 
-    document.getElementById('fb-parse-btn')?.addEventListener('click', () => {
-      const parsed = Cloud.parseConfigFromText(document.getElementById('fb-paste-config').value);
-      if (!parsed) {
-        this.showToast('No se encontr\u00f3 firebaseConfig v\u00e1lido. Copia el bloque completo de Firebase Console.', 'error');
-        return;
-      }
-      document.getElementById('fb-api-key').value = parsed.apiKey;
-      document.getElementById('fb-project-id').value = parsed.projectId;
-      document.getElementById('fb-app-id').value = parsed.appId;
-      this.showToast('Campos rellenados. Pulsa Guardar Firebase y luego Probar conexi\u00f3n', 'success');
+    const readCloudForm = () => ({
+      apiKey: document.getElementById('cloud-api-key').value.trim(),
+      binId: document.getElementById('cloud-bin-id').value.trim()
     });
 
-    document.getElementById('save-firebase-btn')?.addEventListener('click', async () => {
-      Cloud.saveConfig({
-        apiKey: document.getElementById('fb-api-key').value.trim(),
-        projectId: document.getElementById('fb-project-id').value.trim(),
-        appId: document.getElementById('fb-app-id').value.trim()
-      });
-      const status = document.getElementById('firebase-status');
-      if (Cloud.enabled && isCreator) {
-        try {
-          await Cloud.uploadCreatorAccount(user);
-          if (status) status.textContent = '\u2705 Nube activa y tu cuenta est\u00e1 publicada para colaboradores';
-        } catch (e) {
-          if (status) status.textContent = '\u26a0\ufe0f Firebase OK pero: ' + e.message;
-        }
-      } else if (status) {
-        status.textContent = Cloud.enabled
-          ? '\u2705 Nube activa \u2014 los colaboradores remotos pueden sincronizar'
-          : '\u26a0\ufe0f Revisa la configuraci\u00f3n de Firebase';
-        status.style.color = Cloud.enabled ? 'var(--success)' : 'var(--accent)';
+    document.getElementById('copy-bin-id-btn')?.addEventListener('click', () => {
+      const binId = document.getElementById('cloud-bin-id').value.trim();
+      if (!binId) return this.showToast('Crea la nube primero', 'error');
+      navigator.clipboard.writeText(binId);
+      this.showToast('Bin ID copiado', 'success');
+    });
+
+    document.getElementById('save-cloud-btn')?.addEventListener('click', () => {
+      const ok = Cloud.saveConfig(readCloudForm());
+      const status = document.getElementById('cloud-status');
+      if (status) {
+        status.textContent = ok
+          ? '\u2705 Configuraci\u00f3n guardada'
+          : '\u26a0\ufe0f Necesitas al menos la API Key de JSONBin';
+        status.style.color = ok ? 'var(--success)' : 'var(--accent)';
       }
-      this.showToast(Cloud.enabled ? 'Firebase conectado' : 'Error al conectar Firebase', Cloud.enabled ? 'success' : 'error');
+      this.showToast(ok ? 'Nube configurada' : 'Falta API Key', ok ? 'success' : 'error');
+    });
+
+    document.getElementById('create-cloud-btn')?.addEventListener('click', async () => {
+      const status = document.getElementById('cloud-status');
+      try {
+        Cloud.saveConfig(readCloudForm());
+        if (!Cloud.getConfig()?.apiKey) throw new Error('Pega tu API Key de JSONBin primero');
+        const binId = await Cloud.createCloudBin();
+        document.getElementById('cloud-bin-id').value = binId;
+        if (status) {
+          status.textContent = `\u2705 Nube creada. Bin ID: ${binId}`;
+          status.style.color = 'var(--success)';
+        }
+        this.showToast('Nube creada. Comparte el Bin ID con tus colaboradores', 'success');
+      } catch (e) {
+        if (status) {
+          status.textContent = '\u274c ' + e.message;
+          status.style.color = 'var(--accent)';
+        }
+        this.showToast(e.message, 'error');
+      }
     });
 
     document.getElementById('upload-cloud-btn')?.addEventListener('click', async () => {
-      const status = document.getElementById('firebase-status');
+      const status = document.getElementById('cloud-status');
       try {
-        if (!Cloud.enabled) throw new Error('Guarda Firebase primero');
+        Cloud.saveConfig(readCloudForm());
+        if (!Cloud.enabled) throw new Error('Guarda API Key y crea la nube primero');
         await Cloud.uploadCreatorAccount(user);
         if (status) {
-          status.textContent = `\u2705 Cuenta publicada. ID: ${user.creatorCode} \u2014 ya visible para colaboradores remotos`;
+          status.textContent = `\u2705 Cuenta publicada. ID: ${user.creatorCode} \u2014 visible para colaboradores`;
           status.style.color = 'var(--success)';
         }
         this.showToast('Cuenta subida a la nube', 'success');
@@ -3232,45 +3183,43 @@ const App = {
       }
     });
 
-    document.getElementById('export-firebase-btn')?.addEventListener('click', () => {
-      const config = Storage.get(Storage.KEYS.FIREBASE);
-      if (!config?.apiKey || !config?.projectId || !config?.appId) {
-        this.showToast('Guarda Firebase primero', 'error');
+    document.getElementById('export-sync-btn')?.addEventListener('click', () => {
+      const config = Storage.get(Storage.KEYS.CLOUD);
+      if (!config?.apiKey || !config?.binId) {
+        this.showToast('Crea y guarda la nube primero', 'error');
         return;
       }
       const blob = new Blob([JSON.stringify({
+        provider: 'jsonbin',
         apiKey: config.apiKey,
-        projectId: config.projectId,
-        appId: config.appId
+        binId: config.binId
       }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'firebase-config.json';
+      a.download = 'sync-config.json';
       a.click();
       URL.revokeObjectURL(a.href);
       this.showToast('Descargado. S\u00fabelo a la ra\u00edz del repo en GitHub', 'success');
     });
 
-    document.getElementById('test-firebase-btn')?.addEventListener('click', async () => {
-      const status = document.getElementById('firebase-status');
+    document.getElementById('test-cloud-btn')?.addEventListener('click', async () => {
+      const status = document.getElementById('cloud-status');
       try {
-        Cloud.saveConfig({
-          apiKey: document.getElementById('fb-api-key').value.trim(),
-          projectId: document.getElementById('fb-project-id').value.trim(),
-          appId: document.getElementById('fb-app-id').value.trim()
-        });
+        Cloud.saveConfig(readCloudForm());
         await Cloud.testConnection();
+        const c = Cloud.getConfig();
+        if (c?.binId) document.getElementById('cloud-bin-id').value = c.binId;
         if (status) {
-          status.textContent = '\u2705 Conexi\u00f3n con Firebase correcta';
+          status.textContent = '\u2705 Conexi\u00f3n con JSONBin correcta';
           status.style.color = 'var(--success)';
         }
-        this.showToast('Firebase funciona correctamente', 'success');
+        this.showToast('JSONBin funciona correctamente', 'success');
       } catch (e) {
         if (status) {
           status.textContent = '\u274c ' + e.message;
           status.style.color = 'var(--accent)';
         }
-        this.showToast('Error de Firebase', 'error');
+        this.showToast('Error de conexi\u00f3n', 'error');
       }
     });
   },
@@ -3403,39 +3352,36 @@ function setupAuthForms() {
       document.getElementById(tab.dataset.tab + '-form').classList.add('active');
     });
   });
-  function saveAuthFirebaseFromForm() {
-    const apiKey = document.getElementById('auth-fb-api-key')?.value.trim();
-    const projectId = document.getElementById('auth-fb-project-id')?.value.trim();
-    const appId = document.getElementById('auth-fb-app-id')?.value.trim();
-    if (apiKey && projectId && appId) {
-      Cloud.saveConfig({ apiKey, projectId, appId });
+  function saveAuthCloudFromForm() {
+    const apiKey = document.getElementById('auth-cloud-api-key')?.value.trim();
+    const binId = document.getElementById('auth-cloud-bin-id')?.value.trim();
+    if (apiKey && binId) {
+      Cloud.saveConfig({ apiKey, binId });
       return true;
     }
     return Cloud.isConfigured();
   }
 
-  function fillAuthFirebaseFields() {
-    const c = Storage.get(Storage.KEYS.FIREBASE) || {};
-    const api = document.getElementById('auth-fb-api-key');
-    const proj = document.getElementById('auth-fb-project-id');
-    const app = document.getElementById('auth-fb-app-id');
+  function fillAuthCloudFields() {
+    const c = Storage.get(Storage.KEYS.CLOUD) || {};
+    const api = document.getElementById('auth-cloud-api-key');
+    const bin = document.getElementById('auth-cloud-bin-id');
     if (api && c.apiKey) api.value = c.apiKey;
-    if (proj && c.projectId) proj.value = c.projectId;
-    if (app && c.appId) app.value = c.appId;
-    updateAuthFirebaseStatus();
+    if (bin && c.binId) bin.value = c.binId;
+    updateAuthCloudStatus();
   }
 
-  function updateAuthFirebaseStatus() {
-    const el = document.getElementById('auth-firebase-status');
+  function updateAuthCloudStatus() {
+    const el = document.getElementById('auth-cloud-status');
     if (!el) return;
     if (Cloud.enabled) {
-      el.textContent = '\u2705 Firebase conectado';
+      el.textContent = '\u2705 Nube conectada';
       el.style.color = 'var(--success)';
-    } else if (Cloud.isConfigured()) {
-      el.textContent = '\u26a0\ufe0f Firebase guardado pero sin conexi\u00f3n. Revisa los datos.';
+    } else if (Cloud.getConfig()?.apiKey) {
+      el.textContent = '\u26a0\ufe0f Falta Bin ID del creador o la API Key es incorrecta.';
       el.style.color = 'var(--accent)';
     } else {
-      el.textContent = 'Pega la misma config Firebase que el creador (Ajustes \u2192 Firebase).';
+      el.textContent = 'Pide al creador su API Key y Bin ID (Ajustes \u2192 Sincronizaci\u00f3n).';
       el.style.color = 'var(--text-muted)';
     }
   }
@@ -3450,10 +3396,10 @@ function setupAuthForms() {
     });
   });
 
-  ['auth-fb-api-key', 'auth-fb-project-id', 'auth-fb-app-id'].forEach(id => {
+  ['auth-cloud-api-key', 'auth-cloud-bin-id'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', () => {
-      saveAuthFirebaseFromForm();
-      updateAuthFirebaseStatus();
+      saveAuthCloudFromForm();
+      updateAuthCloudStatus();
     });
   });
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -3462,9 +3408,8 @@ function setupAuthForms() {
     btn.disabled = true;
     btn.textContent = 'Entrando...';
     try {
-      saveAuthFirebaseFromForm();
+      saveAuthCloudFromForm();
       await Cloud.bootstrap();
-      if (!Cloud.enabled && Cloud.isConfigured()) Cloud.init();
       const result = await Auth.login(
         document.getElementById('login-username').value.trim(),
         document.getElementById('login-password').value
@@ -3486,12 +3431,12 @@ function setupAuthForms() {
     try {
       const role = document.querySelector('input[name="role"]:checked').value;
       if (role === 'collaborator') {
-        saveAuthFirebaseFromForm();
+        saveAuthCloudFromForm();
         await Cloud.bootstrap();
         if (!Cloud.enabled) {
           showAuthMessage({
             success: false,
-            message: 'Configura Firebase abajo (misma config que el creador) antes de registrarte como colaborador.'
+            message: 'Configura la nube abajo (API Key + Bin ID del creador) antes de registrarte como colaborador.'
           });
           return;
         }
@@ -3525,7 +3470,7 @@ function showAuthMessage(result) {
 document.addEventListener('DOMContentLoaded', async () => {
   await Cloud.bootstrap();
   setupAuthForms();
-  fillAuthFirebaseFields();
+  fillAuthCloudFields();
   if (Auth.getSession()) Router.showApp();
   else Router.showAuth();
 });
