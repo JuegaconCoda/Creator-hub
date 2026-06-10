@@ -330,8 +330,8 @@ body {
           <button type="submit" class="btn btn-primary btn-full">Crear cuenta</button>
         </form>
         <details id="auth-cloud-section" class="auth-firebase-panel" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);font-weight:600">Nube JSONBin (colaboraci&oacute;n remota)</summary>
-          <p style="font-size:12px;color:var(--text-muted);margin:10px 0">Pide al creador su API Key y Bin ID (Ajustes &rarr; Sincronizaci&oacute;n). Gratis en <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a>.</p>
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);font-weight:600">Nube JSONBin (opcional)</summary>
+          <p style="font-size:12px;color:var(--text-muted);margin:10px 0">No hace falta para crear cuenta. Solo si quieres sincronizar con otro dispositivo o unirte a un creador remoto. Config&uacute;ralo despu&eacute;s en Ajustes.</p>
           <div class="form-group"><label for="auth-cloud-api-key">API Key JSONBin</label><input type="password" id="auth-cloud-api-key" placeholder="X-Master-Key" autocomplete="off"></div>
           <div class="form-group"><label for="auth-cloud-bin-id">Bin ID</label><input type="text" id="auth-cloud-bin-id" placeholder="65a1b2c3..." autocomplete="off"></div>
           <p id="auth-cloud-status" class="form-hint" style="margin-top:4px"></p>
@@ -1060,7 +1060,7 @@ const Auth = {
 
     return {
       creator: null, code,
-      error: 'Para unirte desde otro dispositivo, pega la API Key y Bin ID del creador abajo (o pide que suba sync-config.json al repo de GitHub).'
+      error: 'Creador no encontrado en este dispositivo. Si est\u00e1 en otro navegador, pide que suba su cuenta a la nube (Ajustes) y luego pega API Key + Bin ID abajo, o usa el mismo navegador del creador.'
     };
   },
 
@@ -1108,15 +1108,6 @@ const Auth = {
       createdAt: new Date().toISOString()
     };
 
-    if (Cloud.enabled || (data.role === 'collaborator' && Cloud.isConfigured())) {
-      if (!Cloud.enabled) Cloud.init();
-      const result = await Cloud.registerUser(user);
-      if (!result.success) return result;
-      Storage.setSession({ userId: user.id, role: user.role, username });
-      Cloud.startAutoSync();
-      return { success: true, message: '\u00a1Cuenta creada! Redirigiendo...' };
-    }
-
     const users = Storage.getUsers();
     if (Storage.findUserByUsername(username)) {
       return { success: false, message: 'Este nombre de usuario ya existe' };
@@ -1139,7 +1130,23 @@ const Auth = {
     }
 
     Storage.setSession({ userId: user.id, role: user.role, username });
-    return { success: true, message: '\u00a1Cuenta creada! Redirigiendo...' };
+
+    if (Cloud.isConfigured()) {
+      if (!Cloud.enabled) Cloud.init();
+      if (Cloud.enabled) {
+        try {
+          const cloudResult = await Cloud.registerUser(user);
+          if (cloudResult.success) Cloud.startAutoSync();
+        } catch (e) {
+          console.warn('[Auth] Sincronizaci\u00f3n en registro omitida:', e);
+        }
+      }
+    }
+
+    const cloudHint = data.role === 'creator'
+      ? ' Puedes subir tu cuenta a la nube en Ajustes cuando quieras.'
+      : '';
+    return { success: true, message: '\u00a1Cuenta creada! Redirigiendo...' + cloudHint };
   },
 
   loginLocal(username, password) {
@@ -3381,7 +3388,7 @@ function setupAuthForms() {
       el.textContent = '\u26a0\ufe0f Falta Bin ID del creador o la API Key es incorrecta.';
       el.style.color = 'var(--accent)';
     } else {
-      el.textContent = 'Pide al creador su API Key y Bin ID (Ajustes \u2192 Sincronizaci\u00f3n).';
+      el.textContent = 'Opcional. Configura la nube en Ajustes despu\u00e9s de crear tu cuenta.';
       el.style.color = 'var(--text-muted)';
     }
   }
@@ -3429,18 +3436,8 @@ function setupAuthForms() {
     btn.disabled = true;
     btn.textContent = 'Creando...';
     try {
-      const role = document.querySelector('input[name="role"]:checked').value;
-      if (role === 'collaborator') {
-        saveAuthCloudFromForm();
-        await Cloud.bootstrap();
-        if (!Cloud.enabled) {
-          showAuthMessage({
-            success: false,
-            message: 'Configura la nube abajo (API Key + Bin ID del creador) antes de registrarte como colaborador.'
-          });
-          return;
-        }
-      }
+      saveAuthCloudFromForm();
+      await Cloud.bootstrap();
       const data = {
         username: document.getElementById('register-username').value.trim(),
         password: document.getElementById('register-password').value,
