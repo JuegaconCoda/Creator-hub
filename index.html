@@ -587,10 +587,57 @@ const Storage = {
     this.saveUsers([...map.values()]);
   },
 
+  itemTimestamp(item) {
+    return item?.updatedAt || item?.createdAt || item?.joinedAt || '';
+  },
+
+  mergeItemsById(local = [], remote = []) {
+    const map = new Map();
+    local.forEach(item => {
+      if (item?.id) map.set(item.id, item);
+    });
+    remote.forEach(item => {
+      if (!item?.id) return;
+      const prev = map.get(item.id);
+      if (!prev || this.itemTimestamp(item) >= this.itemTimestamp(prev)) {
+        map.set(item.id, item);
+      }
+    });
+    return [...map.values()];
+  },
+
+  mergeCollaborators(local = [], remote = []) {
+    const map = new Map();
+    local.forEach(collab => {
+      if (collab?.userId) map.set(collab.userId, collab);
+    });
+    remote.forEach(collab => {
+      if (!collab?.userId) return;
+      const prev = map.get(collab.userId);
+      if (!prev) {
+        map.set(collab.userId, collab);
+        return;
+      }
+      map.set(collab.userId, {
+        ...prev,
+        ...collab,
+        permissions: { ...prev.permissions, ...(collab.permissions || {}) }
+      });
+    });
+    return [...map.values()];
+  },
+
   mergeWorkspace(creatorId, data) {
-    if (data.projects) this.saveProjects(creatorId, data.projects);
-    if (data.tasks) this.saveTasks(creatorId, data.tasks);
-    if (data.collaborators) this.saveCollaborators(creatorId, data.collaborators);
+    const skipSync = true;
+    if (data.projects) {
+      this.saveProjects(creatorId, this.mergeItemsById(this.getProjects(creatorId), data.projects), skipSync);
+    }
+    if (data.tasks) {
+      this.saveTasks(creatorId, this.mergeItemsById(this.getTasks(creatorId), data.tasks), skipSync);
+    }
+    if (data.collaborators) {
+      this.saveCollaborators(creatorId, this.mergeCollaborators(this.getCollaborators(creatorId), data.collaborators), skipSync);
+    }
   },
 
   getSession() {
@@ -610,11 +657,11 @@ const Storage = {
     return all[creatorId] || [];
   },
 
-  saveProjects(creatorId, projects) {
+  saveProjects(creatorId, projects, skipSync = false) {
     const all = this.get(this.KEYS.PROJECTS) || {};
     all[creatorId] = projects;
     this.set(this.KEYS.PROJECTS, all);
-    if (Cloud.enabled) Cloud.pushWorkspace(creatorId).catch(console.error);
+    if (Cloud.enabled && !skipSync) Cloud.syncNow(creatorId).catch(console.error);
   },
 
   getTasks(creatorId) {
@@ -622,11 +669,11 @@ const Storage = {
     return all[creatorId] || [];
   },
 
-  saveTasks(creatorId, tasks) {
+  saveTasks(creatorId, tasks, skipSync = false) {
     const all = this.get(this.KEYS.TASKS) || {};
     all[creatorId] = tasks;
     this.set(this.KEYS.TASKS, all);
-    if (Cloud.enabled) Cloud.pushWorkspace(creatorId).catch(console.error);
+    if (Cloud.enabled && !skipSync) Cloud.syncNow(creatorId).catch(console.error);
   },
 
   getCollaborators(creatorId) {
@@ -634,11 +681,11 @@ const Storage = {
     return all[creatorId] || [];
   },
 
-  saveCollaborators(creatorId, collabs) {
+  saveCollaborators(creatorId, collabs, skipSync = false) {
     const all = this.get(this.KEYS.COLLABS) || {};
     all[creatorId] = collabs;
     this.set(this.KEYS.COLLABS, all);
-    if (Cloud.enabled) Cloud.pushWorkspace(creatorId).catch(console.error);
+    if (Cloud.enabled && !skipSync) Cloud.syncNow(creatorId).catch(console.error);
   },
 
   defaultSettings() {
@@ -702,11 +749,208 @@ const Storage = {
 };
 
 
+const GitHubSync = {
+  DEFAULT_PATH: 'data/creatorhub-sync.json',
+
+  emptyState() {
+    return { users: {}, codes: {}, workspaces: {}, updatedAt: null };
+  },
+
+  detectRepo() {
+    if (typeof AppConfig === 'undefined' || !AppConfig.isGitHubPages()) return null;
+    const host = window.location.hostname;
+    if (!host.endsWith('.github.io')) return null;
+
+    const owner = host.replace('.github.io', '');
+    const parts = window.location.pathname.split('/').filter(Boolean);
+
+    if (parts.length === 0) {
+      return {
+        owner,
+        repo: `${owner}.github.io`,
+        branch: 'main',
+        path: this.DEFAULT_PATH
+      };
+    }
+
+    return {
+      owner,
+      repo: parts[0],
+      branch: 'main',
+      path: this.DEFAULT_PATH
+    };
+  },
+
+  normalizeConfig(config = {}) {
+    const detected = this.detectRepo();
+    return {
+      provider: 'github',
+      owner: (config.owner || detected?.owner || '').trim(),
+      repo: (config.repo || detected?.repo || '').trim(),
+      branch: (config.branch || detected?.branch || 'main').trim(),
+      path: (config.path || detected?.path || this.DEFAULT_PATH).trim(),
+      token: (config.token || '').trim()
+    };
+  },
+
+  isReady(config) {
+    const c = this.normalizeConfig(config);
+    return !!(c.owner && c.repo && c.token);
+  },
+
+  headers(config) {
+    const c = this.normalizeConfig(config);
+    const headers = {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+    if (c.token) headers.Authorization = `Bearer ${c.token}`;
+    return headers;
+  },
+
+  contentsUrl(config, query = '') {
+    const c = this.normalizeConfig(config);
+    const base = `https://api.github.com/repos/${c.owner}/${c.repo}/contents/${c.path}`;
+    return query ? `${base}?${query}` : base;
+  },
+
+  rawUrl(config) {
+    const c = this.normalizeConfig(config);
+    return `https://raw.githubusercontent.com/${c.owner}/${c.repo}/${c.branch}/${c.path}`;
+  },
+
+  encodeBase64Utf8(str) {
+    const bytes = new TextEncoder().encode(str);
+    let binary = '';
+    bytes.forEach(b => { binary += String.fromCharCode(b); });
+    return btoa(binary);
+  },
+
+  decodeBase64Utf8(b64) {
+    const binary = atob((b64 || '').replace(/\s/g, ''));
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  },
+
+  normalizeState(state) {
+    if (!state || typeof state !== 'object') return this.emptyState();
+    if (!state.users) state.users = {};
+    if (!state.codes) state.codes = {};
+    if (!state.workspaces) state.workspaces = {};
+    return state;
+  },
+
+  mergeStates(remote, local) {
+    const users = { ...(remote.users || {}), ...(local.users || {}) };
+    const codes = { ...(remote.codes || {}), ...(local.codes || {}) };
+    const workspaces = { ...(remote.workspaces || {}) };
+
+    Object.keys(local.workspaces || {}).forEach(creatorId => {
+      const r = remote.workspaces?.[creatorId] || {};
+      const l = local.workspaces[creatorId] || {};
+      workspaces[creatorId] = {
+        projects: Storage.mergeItemsById(r.projects || [], l.projects || []),
+        tasks: Storage.mergeItemsById(r.tasks || [], l.tasks || []),
+        collaborators: Storage.mergeCollaborators(r.collaborators || [], l.collaborators || []),
+        updatedAt: new Date().toISOString()
+      };
+    });
+
+    return {
+      users,
+      codes,
+      workspaces,
+      updatedAt: new Date().toISOString()
+    };
+  },
+
+  async load(config, force, cache) {
+    const c = this.normalizeConfig(config);
+    if (!c.owner || !c.repo) {
+      throw new Error('Falta el repositorio de GitHub (owner/repo)');
+    }
+
+    if (!force && cache?.state && Date.now() - cache.at < 4000) {
+      return { state: cache.state, sha: cache.sha || null };
+    }
+
+    if (c.token) {
+      const res = await fetch(
+        this.contentsUrl(config, `ref=${encodeURIComponent(c.branch)}`),
+        { headers: this.headers(config), cache: 'no-store' }
+      );
+
+      if (res.status === 404) {
+        return { state: this.emptyState(), sha: null };
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `GitHub error ${res.status}`);
+      }
+
+      const json = await res.json();
+      const state = this.normalizeState(JSON.parse(this.decodeBase64Utf8(json.content)));
+      return { state, sha: json.sha || null };
+    }
+
+    const res = await fetch(this.rawUrl(config), { cache: 'no-store' });
+    if (res.status === 404) return { state: this.emptyState(), sha: null };
+    if (!res.ok) throw new Error(`No se pudo leer ${c.path} (${res.status}). Necesitas token para escribir.`);
+    const state = this.normalizeState(await res.json());
+    return { state, sha: null };
+  },
+
+  async save(config, state, sha, retries = 3) {
+    const c = this.normalizeConfig(config);
+    if (!c.token) {
+      throw new Error('Necesitas un Personal Access Token de GitHub con permiso de escritura en el repo');
+    }
+
+    let payload = { ...state, updatedAt: new Date().toISOString() };
+
+    for (let attempt = 0; attempt < retries; attempt++) {
+      if (attempt > 0) {
+        const remote = await this.load(config, true);
+        sha = remote.sha;
+        payload = this.mergeStates(remote.state, payload);
+      }
+
+      const body = {
+        message: `CreatorHub sync ${new Date().toISOString()}`,
+        content: this.encodeBase64Utf8(JSON.stringify(payload, null, 2)),
+        branch: c.branch
+      };
+      if (sha) body.sha = sha;
+
+      const res = await fetch(this.contentsUrl(config), {
+        method: 'PUT',
+        headers: { ...this.headers(config), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (res.status === 409 && attempt < retries - 1) continue;
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `GitHub error ${res.status}`);
+      }
+
+      const json = await res.json();
+      return json.content?.sha || json.commit?.sha || sha;
+    }
+
+    throw new Error('Conflicto al guardar en GitHub. Intenta de nuevo.');
+  }
+};
+
+
 const Cloud = {
   enabled: false,
   syncTimer: null,
   _stateCache: null,
   _stateCacheAt: 0,
+  _githubSha: null,
 
   getConfig() {
     return Storage.get(Storage.KEYS.CLOUD) || null;
@@ -716,13 +960,40 @@ const Cloud = {
     return this.applyConfig(config);
   },
 
+  getProvider() {
+    const c = this.getConfig();
+    if (!c) return null;
+    if (c.provider === 'github' || (c.owner && c.repo)) return 'github';
+    if (c.provider === 'jsonbin' || c.apiKey) return 'jsonbin';
+    return null;
+  },
+
+  getSyncLabel() {
+    return this.getProvider() === 'github' ? 'GitHub' : 'JSONBin';
+  },
+
   isConfigured() {
     const c = this.getConfig();
-    return !!(c?.apiKey && c?.binId);
+    if (!c) return false;
+    if (this.getProvider() === 'github') {
+      return GitHubSync.isReady(c);
+    }
+    return !!(c.apiKey && c.binId);
   },
 
   applyConfig(config) {
-    if (!config?.apiKey?.trim()) return false;
+    if (!config) return false;
+    const prev = this.getConfig() || {};
+
+    if (config.provider === 'github' || config.owner || config.token) {
+      const record = GitHubSync.normalizeConfig({ ...prev, ...config, provider: 'github' });
+      if (!record.owner || !record.repo) return false;
+      Storage.set(Storage.KEYS.CLOUD, record);
+      this.init();
+      return this.enabled;
+    }
+
+    if (!config.apiKey?.trim()) return false;
     const record = {
       provider: 'jsonbin',
       apiKey: config.apiKey.trim(),
@@ -750,24 +1021,66 @@ const Cloud = {
         const res = await fetch(url, { cache: 'no-store' });
         if (!res.ok) continue;
         const config = await res.json();
+        const prev = this.getConfig() || {};
+
+        if (config.provider === 'github' || (config.owner && config.repo)) {
+          const record = GitHubSync.normalizeConfig({
+            ...prev,
+            ...config,
+            provider: 'github',
+            token: config.token || prev.token || ''
+          });
+          Storage.set(Storage.KEYS.CLOUD, record);
+          this.init();
+          if (this.enabled) return true;
+          continue;
+        }
+
         if (config.apiKey && (config.binId || config.provider === 'jsonbin')) {
-          if (this.applyConfig(config)) return true;
+          if (this.applyConfig({ ...prev, ...config })) return true;
         }
       } catch (e) {
         console.warn('[Cloud] sync-config.json no disponible en', url);
       }
     }
 
-    return false;
+    const detected = typeof GitHubSync !== 'undefined' ? GitHubSync.detectRepo() : null;
+    if (detected && !this.getConfig()) {
+      Storage.set(Storage.KEYS.CLOUD, GitHubSync.normalizeConfig({ ...detected, token: '' }));
+      this.init();
+    }
+
+    return this.enabled;
   },
 
   init() {
-    this.enabled = this.isConfigured();
+    const provider = this.getProvider();
+    if (provider === 'github') {
+      this.enabled = GitHubSync.isReady(this.getConfig());
+    } else if (provider === 'jsonbin') {
+      const c = this.getConfig();
+      this.enabled = !!(c?.apiKey && c?.binId);
+    } else {
+      this.enabled = false;
+    }
     this._stateCache = null;
+    this._stateCacheAt = 0;
+    this._githubSha = null;
   },
 
   formatError(err) {
     const msg = String(err?.message || err || '');
+    if (this.getProvider() === 'github') {
+      if (msg.includes('401') || msg.toLowerCase().includes('bad credentials')) {
+        return 'Token de GitHub inv\u00e1lido. Crea uno en GitHub \u2192 Settings \u2192 Developer settings \u2192 Tokens.';
+      }
+      if (msg.includes('403')) {
+        return 'Sin permiso en el repo. El token necesita acceso de lectura/escritura a Contents.';
+      }
+      if (msg.includes('404')) {
+        return 'Repo o archivo no encontrado. Pulsa "Crear archivo en GitHub" primero.';
+      }
+    }
     if (msg.includes('401') || msg.toLowerCase().includes('unauthorized')) {
       return 'API Key de JSONBin incorrecta. C\u00f3piala de jsonbin.io \u2192 API Keys.';
     }
@@ -775,7 +1088,7 @@ const Cloud = {
       return 'Bin ID no encontrado. El creador debe pulsar "Crear nube" o compartir el Bin ID correcto.';
     }
     if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
-      return 'Sin conexi\u00f3n a internet o JSONBin no responde. Revisa tu red.';
+      return 'Sin conexi\u00f3n a internet. Revisa tu red.';
     }
     return msg || 'Error de sincronizaci\u00f3n';
   },
@@ -813,8 +1126,20 @@ const Cloud = {
       return this._stateCache;
     }
 
+    if (this.getProvider() === 'github') {
+      const loaded = await GitHubSync.load(this.getConfig(), force, {
+        state: this._stateCache,
+        sha: this._githubSha,
+        at: this._stateCacheAt
+      });
+      this._stateCache = loaded.state;
+      this._githubSha = loaded.sha;
+      this._stateCacheAt = Date.now();
+      return this._stateCache;
+    }
+
     const c = this.getConfig();
-    if (!c.binId) {
+    if (!c?.binId) {
       this._stateCache = this.emptyState();
       this._stateCacheAt = Date.now();
       return this._stateCache;
@@ -831,6 +1156,14 @@ const Cloud = {
   },
 
   async saveState(state) {
+    if (this.getProvider() === 'github') {
+      state.updatedAt = new Date().toISOString();
+      this._githubSha = await GitHubSync.save(this.getConfig(), state, this._githubSha);
+      this._stateCache = state;
+      this._stateCacheAt = Date.now();
+      return this.getConfig()?.path || GitHubSync.DEFAULT_PATH;
+    }
+
     const c = this.getConfig();
     state.updatedAt = new Date().toISOString();
 
@@ -993,13 +1326,15 @@ const Cloud = {
       const creator = this.creatorFromCode(state, creatorCode);
       const ws = state.workspaces[creator.id] || { projects: [], tasks: [], collaborators: [] };
       ws.collaborators = ws.collaborators || [];
-      ws.collaborators.push({
-        userId: user.id,
-        username: user.username,
-        name: user.name || user.username,
-        permissions: { canEdit: true, canDelete: false, canManageProjects: false, canManageCollabs: false },
-        joinedAt: new Date().toISOString()
-      });
+      if (!ws.collaborators.some(c => c.userId === user.id)) {
+        ws.collaborators.push({
+          userId: user.id,
+          username: user.username,
+          name: user.name || user.username,
+          permissions: { canEdit: true, canDelete: false, canManageProjects: false, canManageCollabs: false },
+          joinedAt: new Date().toISOString()
+        });
+      }
       ws.updatedAt = new Date().toISOString();
       state.workspaces[creator.id] = ws;
     }
@@ -1044,8 +1379,8 @@ const Cloud = {
       ? user.id
       : this.creatorFromCode(state, user.activeCreatorId)?.id;
 
-    if (!creatorId || !state.workspaces[creatorId]) return;
-    Storage.mergeWorkspace(creatorId, state.workspaces[creatorId]);
+    if (!creatorId) return;
+    await this.syncNow(creatorId);
   },
 
   async pullAllForCurrentUser() {
@@ -1053,38 +1388,63 @@ const Cloud = {
     if (!user || !this.enabled) return;
 
     const state = await this.loadState(true);
+    Storage.mergeUsersFromCloud(Object.values(state.users));
 
     if (user.role === 'collaborator') {
       for (const code of user.linkedCreators || []) {
         const creator = this.creatorFromCode(state, code);
-        if (creator && state.workspaces[creator.id]) {
-          Storage.mergeWorkspace(creator.id, state.workspaces[creator.id]);
-        }
+        if (creator) await this.syncNow(creator.id);
       }
-    } else if (state.workspaces[user.id]) {
-      Storage.mergeWorkspace(user.id, state.workspaces[user.id]);
+      return;
     }
 
-    Storage.mergeUsersFromCloud(Object.values(state.users));
+    await this.syncNow(user.id);
   },
 
   async pullWorkspace(creatorId) {
-    const state = await this.loadState(true);
-    if (state.workspaces[creatorId]) {
-      Storage.mergeWorkspace(creatorId, state.workspaces[creatorId]);
-    }
+    return this.syncNow(creatorId);
   },
 
   async pushWorkspace(creatorId) {
-    if (!this.enabled) return;
-    const state = await this.loadState(true);
-    state.workspaces[creatorId] = {
-      projects: Storage.getProjects(creatorId),
-      tasks: Storage.getTasks(creatorId),
-      collaborators: Storage.getCollaborators(creatorId),
-      updatedAt: new Date().toISOString()
-    };
-    await this.saveState(state);
+    return this.syncNow(creatorId);
+  },
+
+  async syncNow(creatorId, options = {}) {
+    if (!this.enabled || !creatorId) return { success: false };
+
+    try {
+      const state = await this.loadState(true);
+      const remote = state.workspaces[creatorId] || {
+        projects: [],
+        tasks: [],
+        collaborators: []
+      };
+
+      const merged = {
+        projects: Storage.mergeItemsById(Storage.getProjects(creatorId), remote.projects || []),
+        tasks: Storage.mergeItemsById(Storage.getTasks(creatorId), remote.tasks || []),
+        collaborators: Storage.mergeCollaborators(Storage.getCollaborators(creatorId), remote.collaborators || [])
+      };
+
+      Storage.saveProjects(creatorId, merged.projects, true);
+      Storage.saveTasks(creatorId, merged.tasks, true);
+      Storage.saveCollaborators(creatorId, merged.collaborators, true);
+
+      state.workspaces[creatorId] = {
+        ...merged,
+        updatedAt: new Date().toISOString()
+      };
+      await this.saveState(state);
+
+      if (options.refreshUi && typeof App !== 'undefined' && App.onWorkspaceSynced) {
+        App.onWorkspaceSynced();
+      }
+
+      return { success: true, merged };
+    } catch (e) {
+      console.error('[Cloud] syncNow:', e);
+      return { success: false, error: e };
+    }
   },
 
   async pushUserUpdate(user) {
@@ -1104,10 +1464,15 @@ const Cloud = {
   startAutoSync() {
     this.stopAutoSync();
     if (!this.enabled) return;
-    this.syncTimer = setInterval(() => {
+
+    const run = () => {
       const creatorId = Auth.getActiveCreatorId();
-      if (creatorId) this.pushWorkspace(creatorId).catch(console.error);
-    }, 25000);
+      if (!creatorId) return;
+      this.syncNow(creatorId, { refreshUi: true }).catch(console.error);
+    };
+
+    run();
+    this.syncTimer = setInterval(run, 15000);
   },
 
   stopAutoSync() {
@@ -1116,6 +1481,14 @@ const Cloud = {
   },
 
   async testConnection() {
+    if (this.getProvider() === 'github') {
+      if (!GitHubSync.isReady(this.getConfig())) {
+        throw new Error('Pega tu token de GitHub y guarda la configuraci\u00f3n');
+      }
+      await this.loadState(true);
+      return true;
+    }
+
     if (!this.getConfig()?.apiKey) {
       throw new Error('Pega tu API Key de JSONBin (gratis en jsonbin.io)');
     }
@@ -1133,8 +1506,18 @@ const Cloud = {
   async createCloudBin() {
     const state = this.emptyState();
     state.ping = Date.now();
-    const binId = await this.saveState(state);
-    return binId;
+    return this.saveState(state);
+  },
+
+  readGitHubForm() {
+    return {
+      provider: 'github',
+      owner: document.getElementById('github-owner')?.value.trim(),
+      repo: document.getElementById('github-repo')?.value.trim(),
+      branch: document.getElementById('github-branch')?.value.trim() || 'main',
+      path: document.getElementById('github-path')?.value.trim() || GitHubSync.DEFAULT_PATH,
+      token: document.getElementById('github-token')?.value.trim()
+    };
   }
 };
 
@@ -1190,7 +1573,7 @@ const Auth = {
           console.error('[Auth] Error buscando creador en la nube:', e);
           return {
             creator: null, code,
-            error: 'Error al conectar con la nube. Revisa API Key y Bin ID de JSONBin (Ajustes \u2192 Sincronizaci\u00f3n).'
+            error: 'Error al conectar con la nube. Revisa GitHub o JSONBin en Ajustes \u2192 Sincronizaci\u00f3n.'
           };
         }
         if (creator) {
@@ -1200,7 +1583,7 @@ const Auth = {
         }
         return {
           creator: null, code,
-          error: `Creador "${code}" no encontrado en la nube. El creador debe ir a Ajustes \u2192 Sincronizaci\u00f3n y pulsar "Subir mi cuenta a la nube".`
+          error: `Creador "${code}" no encontrado en la nube. El creador debe configurar GitHub y pulsar "Subir mi cuenta".`
         };
       }
       return {
@@ -1252,10 +1635,13 @@ const Auth = {
     }
 
     let creatorCode = null;
+    let linkedCreator = null;
     if (data.role === 'collaborator') {
       const resolved = await this.resolveCreator(data.creatorId);
       if (!resolved.creator) return { success: false, message: resolved.error };
       creatorCode = resolved.code;
+      linkedCreator = resolved.creator;
+      Storage.cacheUser(linkedCreator);
     }
 
     const user = {
@@ -1284,17 +1670,19 @@ const Auth = {
       Storage.setCreatorCode(user.id, user.creatorCode);
     }
 
-    if (data.role === 'collaborator') {
-      const creator = users.find(u => u.creatorCode === creatorCode);
-      const collabs = Storage.getCollaborators(creator.id);
-      collabs.push({
-        userId: user.id,
-        username: user.username,
-        name: user.name,
-        permissions: { canEdit: true, canDelete: false, canManageProjects: false, canManageCollabs: false },
-        joinedAt: new Date().toISOString()
-      });
-      Storage.saveCollaborators(creator.id, collabs);
+    if (data.role === 'collaborator' && linkedCreator) {
+      const creatorId = linkedCreator.id;
+      const collabs = Storage.getCollaborators(creatorId);
+      if (!collabs.some(c => c.userId === user.id)) {
+        collabs.push({
+          userId: user.id,
+          username: user.username,
+          name: user.name,
+          permissions: { canEdit: true, canDelete: false, canManageProjects: false, canManageCollabs: false },
+          joinedAt: new Date().toISOString()
+        });
+        Storage.saveCollaborators(creatorId, collabs);
+      }
     }
 
     Storage.setSession({ userId: user.id, role: user.role, username });
@@ -1304,7 +1692,12 @@ const Auth = {
       if (Cloud.enabled) {
         try {
           const cloudResult = await Cloud.registerUser(user);
-          if (cloudResult.success) Cloud.startAutoSync();
+          if (cloudResult.success) {
+            Cloud.startAutoSync();
+            if (data.role === 'collaborator' && linkedCreator) {
+              await Cloud.syncNow(linkedCreator.id);
+            }
+          }
         } catch (e) {
           console.warn('[Auth] Sincronizaci\u00f3n en registro omitida:', e);
         }
@@ -1379,9 +1772,13 @@ const Auth = {
     const user = this.getCurrentUser();
     if (!user) return null;
     if (user.role === 'creator') return user.id;
-    return user.activeCreatorId
-      ? Storage.getUsers().find(u => u.creatorCode === user.activeCreatorId)?.id
-      : null;
+    if (!user.activeCreatorId) return null;
+
+    const code = this.normalizeCreatorCode(user.activeCreatorId);
+    const fromRegistry = Storage.findCreatorUserIdByCode(code);
+    if (fromRegistry) return fromRegistry;
+
+    return Storage.getUsers().find(u => u.creatorCode === code)?.id || null;
   },
 
   getActiveCreator() {
@@ -1395,7 +1792,10 @@ const Auth = {
     if (!user || user.role !== 'collaborator') return { success: false, message: 'Solo colaboradores pueden vincularse' };
 
     const code = this.normalizeCreatorCode(creatorCode);
-    let creator = Storage.getUsers().find(u => u.role === 'creator' && u.creatorCode === code);
+    let creator = null;
+    const registryId = Storage.findCreatorUserIdByCode(code);
+    if (registryId) creator = Storage.getUsers().find(u => u.id === registryId);
+    if (!creator) creator = Storage.getUsers().find(u => u.role === 'creator' && u.creatorCode === code);
 
     if (!creator && Cloud.isConfigured()) {
       if (!Cloud.enabled) Cloud.init();
@@ -1429,7 +1829,7 @@ const Auth = {
 
     if (Cloud.enabled) {
       await Cloud.pushUserUpdate(user);
-      await Cloud.pullWorkspace(creator.id);
+      await Cloud.syncNow(creator.id);
     }
 
     return { success: true, message: `Vinculado a ${creator.name}` };
@@ -1449,7 +1849,7 @@ const Auth = {
     if (Cloud.enabled) {
       await Cloud.pushUserUpdate(user);
       const creator = await Cloud.getUserByCreatorCode(creatorCode);
-      if (creator) await Cloud.pullWorkspace(creator.id);
+      if (creator) await Cloud.syncNow(creator.id);
     }
   }
 };
@@ -1534,15 +1934,19 @@ const Sync = {
       });
     }
 
-    const mergeObj = (key, incoming) => {
+    const mergeWorkspaceMap = (key, incoming, mergeFn) => {
       if (!incoming || typeof incoming !== 'object') return;
       const local = Storage.get(key) || {};
-      Storage.set(key, { ...local, ...incoming });
+      const merged = { ...local };
+      Object.keys(incoming).forEach(creatorId => {
+        merged[creatorId] = mergeFn(local[creatorId] || [], incoming[creatorId] || []);
+      });
+      Storage.set(key, merged);
     };
 
-    mergeObj(Storage.KEYS.PROJECTS, data.projects);
-    mergeObj(Storage.KEYS.TASKS, data.tasks);
-    mergeObj(Storage.KEYS.COLLABS, data.collaborators);
+    mergeWorkspaceMap(Storage.KEYS.PROJECTS, data.projects, Storage.mergeItemsById.bind(Storage));
+    mergeWorkspaceMap(Storage.KEYS.TASKS, data.tasks, Storage.mergeItemsById.bind(Storage));
+    mergeWorkspaceMap(Storage.KEYS.COLLABS, data.collaborators, Storage.mergeCollaborators.bind(Storage));
     mergeObj(Storage.KEYS.SETTINGS, data.settings);
   },
 
@@ -1902,6 +2306,7 @@ const Tasks = {
         const idx = tasks.findIndex(t => t.id === cb.dataset.id);
         tasks[idx].completed = cb.checked;
         tasks[idx].completedAt = cb.checked ? new Date().toISOString() : null;
+        tasks[idx].updatedAt = new Date().toISOString();
         this.saveTasks(tasks);
         this.render(container);
       });
@@ -1981,13 +2386,14 @@ const Tasks = {
 
       if (isEdit) {
         const idx = tasks.findIndex(t => t.id === task.id);
-        tasks[idx] = { ...tasks[idx], ...data };
+        tasks[idx] = { ...tasks[idx], ...data, updatedAt: new Date().toISOString() };
       } else {
         tasks.push({
           id: Storage.generateUuid(),
           ...data,
           completed: false,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
         });
       }
 
@@ -3078,8 +3484,38 @@ const App = {
     this.setupNavigation();
     this.setupModal();
     this.setupLogout();
+    this.setupWorkspaceSync();
     Calendar.handleGoogleCallback();
     this.navigate('dashboard');
+  },
+
+  setupWorkspaceSync() {
+    if (this._workspaceSyncReady) return;
+    this._workspaceSyncReady = true;
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !Cloud.enabled) return;
+      const creatorId = Auth.getActiveCreatorId();
+      if (creatorId) {
+        Cloud.syncNow(creatorId, { refreshUi: true }).catch(console.error);
+      }
+    });
+  },
+
+  onWorkspaceSynced() {
+    this.refreshCurrentSection();
+  },
+
+  refreshCurrentSection() {
+    const section = this.currentSection;
+    switch (section) {
+      case 'dashboard': this.renderDashboard(); break;
+      case 'kanban': Kanban.render(document.getElementById('kanban-section')); break;
+      case 'tasks': Tasks.render(document.getElementById('tasks-section')); break;
+      case 'calendar': Calendar.render(document.getElementById('calendar-section')); break;
+      case 'ai': AI.render(document.getElementById('ai-section')); break;
+      case 'settings': this.renderSettings(); break;
+    }
   },
 
   setupHeader() {
@@ -3147,14 +3583,35 @@ const App = {
     };
     document.getElementById('page-title').textContent = titles[section] || section;
 
+    if (Cloud.enabled && section !== 'settings') {
+      const creatorId = Auth.getActiveCreatorId();
+      if (creatorId) {
+        Cloud.syncNow(creatorId, { refreshUi: true }).catch(console.error);
+      }
+    }
+
     switch (section) {
       case 'dashboard': this.renderDashboard(); break;
       case 'kanban': Kanban.render(document.getElementById('kanban-section')); break;
       case 'tasks': Tasks.render(document.getElementById('tasks-section')); break;
       case 'calendar': Calendar.render(document.getElementById('calendar-section')); break;
       case 'ai': AI.render(document.getElementById('ai-section')); break;
-      case 'settings': this.renderSettings(); break;
+      case 'settings': this.renderSettingsWithSync(); break;
     }
+  },
+
+  async renderSettingsWithSync() {
+    if (Cloud.enabled) {
+      const creatorId = Auth.getActiveCreatorId();
+      if (creatorId) {
+        try {
+          await Cloud.syncNow(creatorId);
+        } catch (e) {
+          console.warn('[App] sync before settings:', e);
+        }
+      }
+    }
+    this.renderSettings();
   },
 
   renderDashboard() {
@@ -3214,6 +3671,125 @@ const App = {
     `;
   },
 
+  getGitHubSyncDefaults() {
+    const cfg = Storage.get(Storage.KEYS.CLOUD) || {};
+    const detected = typeof GitHubSync !== 'undefined' ? GitHubSync.detectRepo() : null;
+    return {
+      owner: cfg.owner || detected?.owner || '',
+      repo: cfg.repo || detected?.repo || '',
+      branch: cfg.branch || detected?.branch || 'main',
+      path: cfg.path || detected?.path || 'data/creatorhub-sync.json',
+      token: cfg.token || ''
+    };
+  },
+
+  renderGitHubSyncHtml(isCreator = true) {
+    const gh = this.getGitHubSyncDefaults();
+    const active = Cloud.getProvider() === 'github' && Cloud.enabled;
+    return `
+      <details open style="margin-top:16px;font-size:12px;color:var(--text-secondary)">
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600">GitHub como servidor (recomendado en Pages)</summary>
+        <p style="margin:10px 0">Guarda los datos en <code>${gh.path}</code> dentro de tu repo. Creador y colaboradores usan el mismo repositorio con su token de GitHub.</p>
+        <div class="form-group">
+          <label>Usuario / organizaci\u00f3n</label>
+          <input type="text" id="github-owner" value="${gh.owner}" placeholder="tu-usuario">
+        </div>
+        <div class="form-group">
+          <label>Repositorio</label>
+          <input type="text" id="github-repo" value="${gh.repo}" placeholder="Creator-hub">
+        </div>
+        <div class="form-group">
+          <label>Rama</label>
+          <input type="text" id="github-branch" value="${gh.branch}" placeholder="main">
+        </div>
+        <div class="form-group">
+          <label>Ruta del archivo</label>
+          <input type="text" id="github-path" value="${gh.path}" placeholder="data/creatorhub-sync.json">
+        </div>
+        <div class="form-group">
+          <label>Token de GitHub (PAT)</label>
+          <input type="password" id="github-token" value="${gh.token}" placeholder="github_pat_... o ghp_...">
+          <small class="form-hint"><a href="https://github.com/settings/tokens?type=beta" target="_blank" style="color:var(--accent)">Crear token</a> con permiso <strong>Contents: Read and write</strong> en este repo. No lo subas al repo.</small>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" id="save-github-btn">Guardar GitHub</button>
+          <button class="btn btn-secondary btn-sm" id="test-github-btn">Probar</button>
+          <button class="btn btn-secondary btn-sm" id="create-github-sync-btn">Crear archivo en GitHub</button>
+          ${isCreator ? '<button class="btn btn-secondary btn-sm" id="upload-cloud-btn">Subir mi cuenta</button>' : ''}
+        </div>
+        <div id="github-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">
+          ${active ? '\u2705 GitHub activo \u2014 sync autom\u00e1tica cada 15 s' : 'Configura el token para activar la sincronizaci\u00f3n'}
+        </div>
+      </details>
+    `;
+  },
+
+  bindGitHubSyncHandlers(user) {
+    const setGithubStatus = (text, ok) => {
+      const el = document.getElementById('github-status');
+      if (!el) return;
+      el.textContent = text;
+      el.style.color = ok === true ? 'var(--success)' : ok === false ? 'var(--accent)' : 'var(--text-muted)';
+    };
+
+    document.getElementById('save-github-btn')?.addEventListener('click', () => {
+      const ok = Cloud.saveConfig(Cloud.readGitHubForm());
+      setGithubStatus(ok ? '\u2705 GitHub configurado' : '\u26a0\ufe0f Completa usuario, repo y token', ok);
+      this.showToast(ok ? 'GitHub configurado' : 'Faltan datos de GitHub', ok ? 'success' : 'error');
+      if (ok) Cloud.startAutoSync();
+    });
+
+    document.getElementById('test-github-btn')?.addEventListener('click', async () => {
+      try {
+        Cloud.saveConfig(Cloud.readGitHubForm());
+        await Cloud.testConnection();
+        setGithubStatus('\u2705 Conexi\u00f3n con GitHub correcta', true);
+        this.showToast('GitHub funciona correctamente', 'success');
+      } catch (e) {
+        setGithubStatus('\u274c ' + e.message, false);
+        this.showToast(e.message, 'error');
+      }
+    });
+
+    document.getElementById('create-github-sync-btn')?.addEventListener('click', async () => {
+      try {
+        Cloud.saveConfig(Cloud.readGitHubForm());
+        if (!Cloud.getConfig()?.token) throw new Error('Pega tu token de GitHub primero');
+        await Cloud.createCloudBin();
+        setGithubStatus(`\u2705 Archivo creado en ${Cloud.getConfig()?.path}`, true);
+        this.showToast('Archivo de sync creado en GitHub', 'success');
+      } catch (e) {
+        setGithubStatus('\u274c ' + e.message, false);
+        this.showToast(e.message, 'error');
+      }
+    });
+
+    document.getElementById('upload-cloud-btn')?.addEventListener('click', async () => {
+      const status = document.getElementById('github-status') || document.getElementById('cloud-status');
+      try {
+        const provider = Cloud.getProvider();
+        if (provider === 'github') Cloud.saveConfig(Cloud.readGitHubForm());
+        else Cloud.saveConfig({
+          apiKey: document.getElementById('cloud-api-key')?.value.trim(),
+          binId: document.getElementById('cloud-bin-id')?.value.trim()
+        });
+        if (!Cloud.enabled) throw new Error('Guarda y prueba la sincronizaci\u00f3n primero');
+        await Cloud.uploadCreatorAccount(user);
+        if (status) {
+          status.textContent = `\u2705 Cuenta publicada. ID: ${user.creatorCode}`;
+          status.style.color = 'var(--success)';
+        }
+        this.showToast('Cuenta subida', 'success');
+      } catch (e) {
+        if (status) {
+          status.textContent = '\u274c ' + e.message;
+          status.style.color = 'var(--accent)';
+        }
+        this.showToast(e.message, 'error');
+      }
+    });
+  },
+
   renderSettings() {
     let user = Auth.getCurrentUser();
     if (user?.role === 'creator') user = Auth.ensureCreatorCode(user);
@@ -3223,6 +3799,7 @@ const App = {
     const settingsOwnerId = Storage.getSettingsOwnerId();
     const hasSharedAi = !!(settings.geminiApiKey || settings.groqApiKey);
     const hasSharedYoutube = !!settings.youtubeApiKey;
+    const syncLabel = Cloud.enabled ? Cloud.getSyncLabel() : 'archivo';
 
     const deployInfo = typeof AppConfig !== 'undefined' ? AppConfig.getEnvironmentLabel() : 'Web';
     const publicUrl = typeof AppConfig !== 'undefined' ? AppConfig.publicUrl : window.location.href;
@@ -3232,7 +3809,7 @@ const App = {
         <div class="ai-card" style="margin-bottom:20px;border-color:var(--success)">
           <h3>\u{1f310} Publicado en GitHub Pages</h3>
           <p style="font-size:13px;color:var(--text-secondary)">URL: <code style="color:var(--accent)">${publicUrl}</code></p>
-          <p style="font-size:12px;color:var(--text-muted);margin-top:8px">Comparte esta URL con tus colaboradores. Configura JSONBin en Ajustes para sincronizar entre dispositivos.</p>
+          <p style="font-size:12px;color:var(--text-muted);margin-top:8px">Comparte esta URL con tus colaboradores. Activa la sincronizaci\u00f3n con GitHub en Ajustes (guarda datos en tu repo).</p>
         </div>
       ` : AppConfig?.isLocalFile?.() ? `
         <div class="ai-card" style="margin-bottom:20px;border-color:var(--warning)">
@@ -3302,7 +3879,9 @@ const App = {
             </p>
             <button class="btn btn-secondary btn-sm" id="import-backup-btn">Importar archivo (.json)</button>
             <input type="file" id="import-backup-file" accept=".json,application/json" style="display:none">
-            <p id="sync-file-status" style="font-size:13px;color:var(--text-muted);margin-top:10px"></p>
+            ${Cloud.enabled ? '<button class="btn btn-secondary btn-sm" id="sync-now-btn">Sincronizar ahora</button>' : ''}
+            <p id="sync-file-status" style="font-size:13px;color:var(--text-muted);margin-top:10px">${Cloud.enabled ? `${syncLabel} activo: cambios fusionados cada 15 s.` : 'Importa el .json del creador o configura GitHub abajo.'}</p>
+            ${this.renderGitHubSyncHtml(false)}
           </div>
         `}
 
@@ -3337,20 +3916,23 @@ const App = {
           <button class="btn btn-primary btn-sm" id="save-ai-btn">Guardar configuraci\u00f3n IA</button>
         </div>
 
-        <div class="settings-card">
-          <h3>\u{1f4c1} Sincronizaci\u00f3n por archivo (recomendado \u2014 gratis, sin claves)</h3>
+          <div class="settings-card">
+            <h3>\u{1f4c1} Sincronizaci\u00f3n</h3>
           <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
-            Exporta un archivo .json y env\u00edalo a tus colaboradores.
+            En GitHub Pages puedes guardar todo en tu repo (recomendado). Tambi\u00e9n puedes exportar/importar .json manualmente.
           </p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
             <button class="btn btn-primary btn-sm" id="export-backup-btn">Exportar mis datos (.json)</button>
             <button class="btn btn-secondary btn-sm" id="import-backup-btn">Importar archivo (.json)</button>
             <input type="file" id="import-backup-file" accept=".json,application/json" style="display:none">
+            ${Cloud.enabled ? '<button class="btn btn-secondary btn-sm" id="sync-now-btn">Sincronizar ahora</button>' : ''}
           </div>
-          <p id="sync-file-status" style="font-size:13px;color:var(--text-muted)">Sin servicios externos. Funciona siempre.</p>
+          <p id="sync-file-status" style="font-size:13px;color:var(--text-muted)">${Cloud.enabled ? `${syncLabel} activo: cambios fusionados cada 15 s.` : 'Configura GitHub abajo o usa exportar/importar.'}</p>
+
+          ${this.renderGitHubSyncHtml(true)}
 
           <details style="margin-top:16px;font-size:12px;color:var(--text-secondary)">
-            <summary style="cursor:pointer;color:var(--accent)">Opcional: JSONBin (autom\u00e1tico en la nube)</summary>
+            <summary style="cursor:pointer;color:var(--accent)">Opcional: JSONBin</summary>
             <p style="margin:10px 0">Solo si quieres sync autom\u00e1tica. Requiere cuenta en <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a>.</p>
             <div class="form-group">
               <label>API Key JSONBin</label>
@@ -3364,7 +3946,6 @@ const App = {
               <button class="btn btn-secondary btn-sm" id="save-cloud-btn">Guardar</button>
               <button class="btn btn-secondary btn-sm" id="test-cloud-btn">Probar</button>
               <button class="btn btn-secondary btn-sm" id="create-cloud-btn">Crear nube</button>
-              <button class="btn btn-secondary btn-sm" id="upload-cloud-btn">Subir cuenta</button>
             </div>
             <div id="cloud-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">
               ${Cloud.enabled ? '\u2705 JSONBin activo' : 'JSONBin no configurado'}
@@ -3463,6 +4044,35 @@ const App = {
       this.showToast('Google Calendar configurado', 'success');
     });
 
+    document.getElementById('sync-now-btn')?.addEventListener('click', async () => {
+      const status = document.getElementById('sync-file-status');
+      const creatorId = Auth.getActiveCreatorId();
+      if (!creatorId) {
+        this.showToast('No hay workspace activo', 'error');
+        return;
+      }
+      if (status) {
+        status.textContent = 'Sincronizando...';
+        status.style.color = 'var(--text-secondary)';
+      }
+      const result = await Cloud.syncNow(creatorId, { refreshUi: true });
+      if (result.success) {
+        if (status) {
+          status.textContent = `\u2705 Sincronizado con ${Cloud.getSyncLabel()}`;
+          status.style.color = 'var(--success)';
+        }
+        this.showToast('Datos sincronizados', 'success');
+        if (this.currentSection === 'settings') this.renderSettings();
+      } else {
+        const msg = Cloud.formatError(result.error);
+        if (status) {
+          status.textContent = '\u274c ' + msg;
+          status.style.color = 'var(--accent)';
+        }
+        this.showToast(msg, 'error');
+      }
+    });
+
     document.getElementById('export-backup-btn')?.addEventListener('click', () => {
       try {
         Sync.exportBackup(Auth.getActiveCreatorId());
@@ -3542,37 +4152,26 @@ const App = {
       }
     });
 
-    document.getElementById('upload-cloud-btn')?.addEventListener('click', async () => {
-      const status = document.getElementById('cloud-status');
-      try {
-        Cloud.saveConfig(readCloudForm());
-        if (!Cloud.enabled) throw new Error('Guarda API Key y crea la nube primero');
-        await Cloud.uploadCreatorAccount(user);
-        if (status) {
-          status.textContent = `\u2705 Cuenta publicada. ID: ${user.creatorCode} \u2014 visible para colaboradores`;
-          status.style.color = 'var(--success)';
-        }
-        this.showToast('Cuenta subida a la nube', 'success');
-      } catch (e) {
-        if (status) {
-          status.textContent = '\u274c ' + e.message;
-          status.style.color = 'var(--accent)';
-        }
-        this.showToast(e.message, 'error');
-      }
-    });
+    this.bindGitHubSyncHandlers(user);
 
     document.getElementById('export-sync-btn')?.addEventListener('click', () => {
       const config = Storage.get(Storage.KEYS.CLOUD);
-      if (!config?.apiKey || !config?.binId) {
-        this.showToast('Crea y guarda la nube primero', 'error');
+      let payload;
+      if (Cloud.getProvider() === 'github') {
+        payload = {
+          provider: 'github',
+          owner: config.owner,
+          repo: config.repo,
+          branch: config.branch || 'main',
+          path: config.path || 'data/creatorhub-sync.json'
+        };
+      } else if (config?.apiKey && config?.binId) {
+        payload = { provider: 'jsonbin', apiKey: config.apiKey, binId: config.binId };
+      } else {
+        this.showToast('Configura GitHub o JSONBin primero', 'error');
         return;
       }
-      const blob = new Blob([JSON.stringify({
-        provider: 'jsonbin',
-        apiKey: config.apiKey,
-        binId: config.binId
-      }, null, 2)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = 'sync-config.json';
@@ -3724,6 +4323,7 @@ const Router = {
       App.setupModal();
       App.setupNavigation();
       App.setupLogout();
+      App.setupWorkspaceSync();
       this.appInitialized = true;
     }
     if (Cloud.enabled) {
