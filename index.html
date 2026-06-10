@@ -327,15 +327,16 @@ body {
           <div id="collaborator-fields" class="role-fields hidden">
             <div class="form-group"><label for="creator-id">ID del Creador</label><input type="text" id="creator-id" placeholder="CR-XXXX-XXXX-XXXX"><small class="form-hint">Pide este c&oacute;digo al creador (lo ve en Ajustes).</small></div>
           </div>
-          <div id="auth-firebase-section" class="role-fields hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
-            <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px"><strong>Firebase</strong> (obligatorio para colaboradores remotos). Pide al creador estos 3 datos de Ajustes &rarr; Firebase.</p>
-            <div class="form-group"><label for="auth-fb-api-key">API Key</label><input type="text" id="auth-fb-api-key" placeholder="AIza..." autocomplete="off"></div>
-            <div class="form-group"><label for="auth-fb-project-id">Project ID</label><input type="text" id="auth-fb-project-id" placeholder="mi-proyecto" autocomplete="off"></div>
-            <div class="form-group"><label for="auth-fb-app-id">App ID</label><input type="text" id="auth-fb-app-id" placeholder="1:123:web:abc" autocomplete="off"></div>
-            <p id="auth-firebase-status" class="form-hint" style="margin-top:4px"></p>
-          </div>
           <button type="submit" class="btn btn-primary btn-full">Crear cuenta</button>
         </form>
+        <details id="auth-firebase-section" class="auth-firebase-panel" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);font-weight:600">Firebase (colaboraci&oacute;n remota)</summary>
+          <p style="font-size:12px;color:var(--text-muted);margin:10px 0">Pega la misma config que el creador. Obligatorio para colaboradores; opcional para creadores que ya tienen cuenta local.</p>
+          <div class="form-group"><label for="auth-fb-api-key">API Key</label><input type="text" id="auth-fb-api-key" placeholder="AIza..." autocomplete="off"></div>
+          <div class="form-group"><label for="auth-fb-project-id">Project ID</label><input type="text" id="auth-fb-project-id" placeholder="mi-proyecto" autocomplete="off"></div>
+          <div class="form-group"><label for="auth-fb-app-id">App ID</label><input type="text" id="auth-fb-app-id" placeholder="1:123:web:abc" autocomplete="off"></div>
+          <p id="auth-firebase-status" class="form-hint" style="margin-top:4px"></p>
+        </details>
         <div id="auth-message" class="auth-message hidden"></div>
       </div>
     </div>
@@ -591,6 +592,7 @@ const Cloud = {
   db: null,
   enabled: false,
   syncTimer: null,
+  _settingsApplied: false,
 
   getConfig() {
     return Storage.get(Storage.KEYS.FIREBASE) || null;
@@ -645,6 +647,66 @@ const Cloud = {
     return false;
   },
 
+  isOfflineError(err) {
+    const msg = String(err?.message || err?.code || err || '').toLowerCase();
+    return msg.includes('offline') || msg.includes('unavailable') || msg.includes('network');
+  },
+
+  formatError(err) {
+    if (this.isOfflineError(err)) {
+      return 'Sin conexi\u00f3n con Firebase. Revisa internet, que Firestore est\u00e9 activo en tu proyecto y que el dominio github.io est\u00e9 autorizado.';
+    }
+    const msg = String(err?.message || err || '');
+    if (msg.includes('permission') || msg.includes('PERMISSION_DENIED')) {
+      return 'Firestore bloque\u00f3 la lectura. En Firebase Console \u2192 Firestore \u2192 Reglas, permite lectura/escritura temporalmente.';
+    }
+    return msg || 'Error de conexi\u00f3n con Firebase';
+  },
+
+  async ensureNetwork() {
+    if (!this.db) return;
+    try {
+      await this.db.enableNetwork();
+    } catch (e) {
+      console.warn('[Cloud] enableNetwork:', e);
+    }
+  },
+
+  async safeGet(docRef) {
+    await this.ensureNetwork();
+    try {
+      return await docRef.get({ source: 'server' });
+    } catch (e) {
+      if (!this.isOfflineError(e)) throw e;
+      try {
+        await this.db.disableNetwork();
+        await this.db.enableNetwork();
+        await new Promise(r => setTimeout(r, 600));
+        return await docRef.get({ source: 'server' });
+      } catch (e2) {
+        throw e2;
+      }
+    }
+  },
+
+  async safeQuery(query) {
+    await this.ensureNetwork();
+    try {
+      return await query.get({ source: 'server' });
+    } catch (e) {
+      if (!this.isOfflineError(e)) throw e;
+      await this.db.disableNetwork();
+      await this.db.enableNetwork();
+      await new Promise(r => setTimeout(r, 600));
+      return await query.get({ source: 'server' });
+    }
+  },
+
+  async safeSet(docRef, data, options) {
+    await this.ensureNetwork();
+    return docRef.set(data, options);
+  },
+
   init() {
     this.enabled = false;
     this.db = null;
@@ -662,7 +724,17 @@ const Cloud = {
           appId: c.appId
         });
       }
+
       this.db = firebase.firestore();
+
+      if (!this._settingsApplied) {
+        this.db.settings({
+          experimentalForceLongPolling: true,
+          merge: true
+        });
+        this._settingsApplied = true;
+      }
+
       this.enabled = true;
     } catch (e) {
       console.error('[Cloud] Init error:', e);
@@ -687,7 +759,7 @@ const Cloud = {
   },
 
   async getUserByUsername(username) {
-    const doc = await this.usersRef().doc(username).get();
+    const doc = await this.safeGet(this.usersRef().doc(username));
     return doc.exists ? doc.data() : null;
   },
 
@@ -701,7 +773,7 @@ const Cloud = {
 
   async saveCreatorCodeMapping(user) {
     if (!user.creatorCode) return;
-    await this.codesRef().doc(user.creatorCode).set({
+    await this.safeSet(this.codesRef().doc(user.creatorCode), {
       userId: user.id,
       username: user.username,
       name: user.name || user.username,
@@ -714,10 +786,10 @@ const Cloud = {
     const normalized = this.normalizeCode(code);
     if (!normalized) return null;
 
-    const codeDoc = await this.codesRef().doc(normalized).get();
+    const codeDoc = await this.safeGet(this.codesRef().doc(normalized));
     if (codeDoc.exists) {
       const mapping = codeDoc.data();
-      const userDoc = await this.usersRef().doc(mapping.username).get();
+      const userDoc = await this.safeGet(this.usersRef().doc(mapping.username));
       if (userDoc.exists) return userDoc.data();
       return {
         id: mapping.userId,
@@ -729,7 +801,7 @@ const Cloud = {
       };
     }
 
-    const snap = await this.usersRef().where('creatorCode', '==', normalized).limit(1).get();
+    const snap = await this.safeQuery(this.usersRef().where('creatorCode', '==', normalized).limit(1));
     if (snap.empty) return null;
     return snap.docs[0].data();
   },
@@ -756,10 +828,10 @@ const Cloud = {
       createdAt: user.createdAt || new Date().toISOString()
     };
 
-    await this.usersRef().doc(user.username).set(record, { merge: true });
+    await this.safeSet(this.usersRef().doc(user.username), record, { merge: true });
     await this.saveCreatorCodeMapping(record);
 
-    await this.workspaceRef(user.id).set({
+    await this.safeSet(this.workspaceRef(user.id), {
       projects: Storage.getProjects(user.id),
       tasks: Storage.getTasks(user.id),
       collaborators: Storage.getCollaborators(user.id),
@@ -799,11 +871,11 @@ const Cloud = {
       createdAt: user.createdAt
     };
 
-    await this.usersRef().doc(username).set(record);
+    await this.safeSet(this.usersRef().doc(username), record);
 
     if (user.role === 'creator') {
       await this.saveCreatorCodeMapping(record);
-      await this.workspaceRef(user.id).set({
+      await this.safeSet(this.workspaceRef(user.id), {
         projects: [],
         tasks: [],
         collaborators: [],
@@ -814,7 +886,7 @@ const Cloud = {
     if (user.role === 'collaborator') {
       const creatorCode = user.activeCreatorId || user.creatorId;
       const creator = await this.getUserByCreatorCode(creatorCode);
-      const ws = await this.workspaceRef(creator.id).get();
+      const ws = await this.safeGet(this.workspaceRef(creator.id));
       const collabs = ws.exists ? (ws.data().collaborators || []) : [];
       collabs.push({
         userId: user.id,
@@ -823,7 +895,7 @@ const Cloud = {
         permissions: { canEdit: true, canDelete: false, canManageProjects: false, canManageCollabs: false },
         joinedAt: new Date().toISOString()
       });
-      await this.workspaceRef(creator.id).set({
+      await this.safeSet(this.workspaceRef(creator.id), {
         ...(ws.data() || {}),
         collaborators: collabs,
         updatedAt: new Date().toISOString()
@@ -835,15 +907,24 @@ const Cloud = {
   },
 
   async loginUser(username, password) {
-    const user = await this.getUserByUsername(username);
-    if (!user) return { success: false, message: 'Usuario o contrase\u00f1a incorrectos' };
+    try {
+      const user = await this.getUserByUsername(username);
+      if (!user) return { success: false, message: 'Usuario o contrase\u00f1a incorrectos', notInCloud: true };
 
-    const ok = await this.verifyPassword(password, user.passwordHash);
-    if (!ok) return { success: false, message: 'Usuario o contrase\u00f1a incorrectos' };
+      const ok = await this.verifyPassword(password, user.passwordHash);
+      if (!ok) return { success: false, message: 'Usuario o contrase\u00f1a incorrectos' };
 
-    Storage.cacheUser(user);
-    await this.pullWorkspaceForUser(user);
-    return { success: true, message: '\u00a1Bienvenido!', user };
+      Storage.cacheUser(user);
+      try {
+        await this.pullWorkspaceForUser(user);
+      } catch (e) {
+        console.warn('[Cloud] pullWorkspace on login:', e);
+      }
+      return { success: true, message: '\u00a1Bienvenido!', user };
+    } catch (e) {
+      console.error('[Cloud] loginUser:', e);
+      return { success: false, message: this.formatError(e), offline: this.isOfflineError(e) };
+    }
   },
 
   async pullWorkspaceForUser(user) {
@@ -853,7 +934,7 @@ const Cloud = {
 
     if (!creatorId) return;
 
-    const doc = await this.workspaceRef(creatorId).get();
+    const doc = await this.safeGet(this.workspaceRef(creatorId));
     if (!doc.exists) return;
 
     const data = doc.data();
@@ -873,19 +954,19 @@ const Cloud = {
       await this.pullWorkspace(user.id);
     }
 
-    const snap = await this.usersRef().get();
+    const snap = await this.safeQuery(this.usersRef());
     const users = snap.docs.map(d => d.data());
     Storage.mergeUsersFromCloud(users);
   },
 
   async pullWorkspace(creatorId) {
-    const doc = await this.workspaceRef(creatorId).get();
+    const doc = await this.safeGet(this.workspaceRef(creatorId));
     if (doc.exists) Storage.mergeWorkspace(creatorId, doc.data());
   },
 
   async pushWorkspace(creatorId) {
     if (!this.enabled) return;
-    await this.workspaceRef(creatorId).set({
+    await this.safeSet(this.workspaceRef(creatorId), {
       projects: Storage.getProjects(creatorId),
       tasks: Storage.getTasks(creatorId),
       collaborators: Storage.getCollaborators(creatorId),
@@ -895,7 +976,7 @@ const Cloud = {
 
   async pushUserUpdate(user) {
     if (!this.enabled) return;
-    await this.usersRef().doc(user.username).set({
+    await this.safeSet(this.usersRef().doc(user.username), {
       youtubeChannel: user.youtubeChannel,
       linkedCreators: user.linkedCreators,
       activeCreatorId: user.activeCreatorId,
@@ -921,7 +1002,7 @@ const Cloud = {
     if (!this.isConfigured()) throw new Error('Completa la configuraci\u00f3n de Firebase');
     this.init();
     if (!this.enabled) throw new Error('No se pudo conectar con Firebase. Revisa los datos.');
-    await this.db.collection('creatorhub_ping').doc('test').set({ t: Date.now() });
+    await this.safeSet(this.db.collection('creatorhub_ping').doc('test'), { t: Date.now() });
     return true;
   }
 };
@@ -1070,25 +1151,48 @@ const Auth = {
     return { success: true, message: '\u00a1Cuenta creada! Redirigiendo...' };
   },
 
+  loginLocal(username, password) {
+    const user = Storage.findUserByUsername(username);
+    if (!user || user.password !== password) return null;
+    Storage.setSession({ userId: user.id, role: user.role, username: user.username || username });
+    return user;
+  },
+
   async login(username, password) {
     const check = this.validateUsername(username);
     if (!check.ok) return { success: false, message: check.message };
 
-    if (Cloud.enabled) {
-      const result = await Cloud.loginUser(check.username, password);
-      if (!result.success) return result;
-      Storage.setSession({ userId: result.user.id, role: result.user.role, username: result.user.username });
-      Cloud.startAutoSync();
+    const localUser = Storage.findUserByUsername(check.username);
+    const localOk = localUser && localUser.password === password;
+
+    if (Cloud.isConfigured()) {
+      if (!Cloud.enabled) Cloud.init();
+      if (Cloud.enabled) {
+        const result = await Cloud.loginUser(check.username, password);
+        if (result.success) {
+          Storage.setSession({ userId: result.user.id, role: result.user.role, username: result.user.username });
+          Cloud.startAutoSync();
+          return { success: true, message: '\u00a1Bienvenido de vuelta!' };
+        }
+        if (localOk && (result.offline || result.notInCloud)) {
+          this.loginLocal(check.username, password);
+          return {
+            success: true,
+            message: result.offline
+              ? 'Entraste en modo local (Firebase sin conexi\u00f3n). Ve a Ajustes \u2192 "Subir mi cuenta a la nube".'
+              : '\u00a1Bienvenido! (modo local \u2014 sube tu cuenta a Firebase en Ajustes para colaboradores remotos)'
+          };
+        }
+        return result;
+      }
+    }
+
+    if (localOk) {
+      this.loginLocal(check.username, password);
       return { success: true, message: '\u00a1Bienvenido de vuelta!' };
     }
 
-    const user = Storage.findUserByUsername(check.username);
-    if (!user || user.password !== password) {
-      return { success: false, message: 'Usuario o contrase\u00f1a incorrectos' };
-    }
-
-    Storage.setSession({ userId: user.id, role: user.role, username: user.username || check.username });
-    return { success: true, message: '\u00a1Bienvenido de vuelta!' };
+    return { success: false, message: 'Usuario o contrase\u00f1a incorrectos' };
   },
 
   logout() {
@@ -3271,7 +3375,6 @@ function setupAuthForms() {
       const isCreator = radio.value === 'creator';
       document.getElementById('creator-fields').classList.toggle('hidden', !isCreator);
       document.getElementById('collaborator-fields').classList.toggle('hidden', isCreator);
-      document.getElementById('auth-firebase-section').classList.toggle('hidden', isCreator);
       document.getElementById('youtube-channel').required = isCreator;
       document.getElementById('creator-id').required = !isCreator;
     });
@@ -3291,6 +3394,7 @@ function setupAuthForms() {
     try {
       saveAuthFirebaseFromForm();
       await Cloud.bootstrap();
+      if (!Cloud.enabled && Cloud.isConfigured()) Cloud.init();
       const result = await Auth.login(
         document.getElementById('login-username').value.trim(),
         document.getElementById('login-password').value
