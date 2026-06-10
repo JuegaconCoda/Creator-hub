@@ -3438,6 +3438,7 @@ function setupAuthForms() {
     try {
       saveAuthCloudFromForm();
       await Cloud.bootstrap();
+      const role = document.querySelector('input[name="role"]:checked').value;
       const data = {
         username: document.getElementById('register-username').value.trim(),
         password: document.getElementById('register-password').value,
