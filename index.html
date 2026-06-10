@@ -607,6 +607,33 @@ const Cloud = {
     return !!(c?.apiKey && c?.projectId && c?.appId);
   },
 
+  parseConfigFromText(text) {
+    const raw = (text || '').trim();
+    if (!raw) return null;
+
+    try {
+      const json = JSON.parse(raw);
+      if (json.apiKey && json.projectId && json.appId) return json;
+      if (json.firebase?.apiKey) return json.firebase;
+    } catch (_) {}
+
+    const pick = (key) => {
+      const m = raw.match(new RegExp(`${key}\\s*[:=]\\s*["'\`]([^"'\`]+)["'\`]`));
+      return m ? m[1].trim() : '';
+    };
+
+    const config = {
+      apiKey: pick('apiKey'),
+      projectId: pick('projectId'),
+      appId: pick('appId'),
+      authDomain: pick('authDomain'),
+      storageBucket: pick('storageBucket'),
+      messagingSenderId: pick('messagingSenderId')
+    };
+
+    return (config.apiKey && config.projectId && config.appId) ? config : null;
+  },
+
   applyConfig(config) {
     if (!config?.apiKey || !config?.projectId || !config?.appId) return false;
     Storage.set(Storage.KEYS.FIREBASE, {
@@ -998,11 +1025,30 @@ const Cloud = {
     this.syncTimer = null;
   },
 
+  validateConfigFields(config) {
+    const c = config || this.getConfig();
+    if (!c?.apiKey?.startsWith('AIza')) {
+      return 'API Key incorrecta. Debe empezar con AIza... (c\u00f3piala del bloque firebaseConfig, no uses la key de YouTube).';
+    }
+    if (!c?.projectId || c.projectId.includes(' ')) {
+      return 'Project ID incorrecto. Es el id del proyecto (ej: creator-hub-123), no el nombre visible.';
+    }
+    if (!c?.appId?.includes(':web:')) {
+      return 'App ID incorrecto. Debe ser como 1:123456789:web:abcdef \u2014 cr\u00e9ala registrando una app Web (</>) en Firebase.';
+    }
+    return null;
+  },
+
   async testConnection() {
+    const config = this.getConfig();
+    const fieldErr = this.validateConfigFields(config);
+    if (fieldErr) throw new Error(fieldErr);
     if (!this.isConfigured()) throw new Error('Completa la configuraci\u00f3n de Firebase');
     this.init();
-    if (!this.enabled) throw new Error('No se pudo conectar con Firebase. Revisa los datos.');
+    if (!this.enabled) throw new Error('No se pudo iniciar Firebase. Recarga la p\u00e1gina e int\u00e9ntalo de nuevo.');
     await this.safeSet(this.db.collection('creatorhub_ping').doc('test'), { t: Date.now() });
+    const doc = await this.safeGet(this.db.collection('creatorhub_ping').doc('test'));
+    if (!doc.exists) throw new Error('Firestore no respondi\u00f3. \u00bfCreaste la base de datos Firestore?');
     return true;
   }
 };
@@ -3005,22 +3051,34 @@ const App = {
 
         <div class="settings-card">
           <h3>\u2601\ufe0f Sincronizaci\u00f3n en la nube (Firebase)</h3>
-          <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
-            Necesario para que colaboradores en otros dispositivos vean tus proyectos. Crea un proyecto gratis en
-            <a href="https://console.firebase.google.com" target="_blank" style="color:var(--accent)">Firebase</a>,
-            activa Firestore y pega la configuraci\u00f3n aqu\u00ed.
-          </p>
+          <details style="margin-bottom:12px;font-size:12px;color:var(--text-secondary)">
+            <summary style="cursor:pointer;color:var(--accent);font-weight:600">Gu\u00eda paso a paso (l\u00e9ela si no conecta)</summary>
+            <ol style="margin:10px 0 0 18px;line-height:1.7">
+              <li>Entra a <a href="https://console.firebase.google.com" target="_blank" style="color:var(--accent)">console.firebase.google.com</a> \u2192 <strong>Crear proyecto</strong></li>
+              <li>Men\u00fa <strong>Build \u2192 Firestore Database</strong> \u2192 <strong>Crear base de datos</strong> \u2192 modo prueba \u2192 regi\u00f3n cercana \u2192 Activar</li>
+              <li>Pesta\u00f1a <strong>Reglas</strong> \u2192 pega: <code style="font-size:10px">allow read, write: if true;</code> \u2192 Publicar</li>
+              <li>Icono <strong>\u2699</strong> arriba \u2192 <strong>Configuraci\u00f3n del proyecto</strong> \u2192 baja a <strong>Tus apps</strong></li>
+              <li>Si no hay app web: clic en <strong>&lt;/&gt;</strong> (Web) \u2192 nombre "CreatorHub" \u2192 Registrar app</li>
+              <li>Copia el bloque <code>firebaseConfig</code> completo y p\u00e9galo abajo en "Pegar config"</li>
+              <li><strong>No uses</strong> la API de YouTube ni Gemini aqu\u00ed \u2014 solo los datos del SDK web de Firebase</li>
+            </ol>
+          </details>
           <div class="form-group">
-            <label>API Key</label>
+            <label>Pegar config de Firebase (recomendado)</label>
+            <textarea id="fb-paste-config" rows="4" placeholder='Pega aqu\u00ed el bloque firebaseConfig = { apiKey: "...", projectId: "...", appId: "..." }' style="width:100%;font-family:monospace;font-size:11px"></textarea>
+            <button type="button" class="btn btn-secondary btn-sm" id="fb-parse-btn" style="margin-top:6px">Rellenar campos desde el bloque pegado</button>
+          </div>
+          <div class="form-group">
+            <label>API Key <small style="color:var(--text-muted)">(empieza con AIza...)</small></label>
             <input type="text" id="fb-api-key" value="${(Storage.get(Storage.KEYS.FIREBASE) || {}).apiKey || ''}" placeholder="AIza...">
           </div>
           <div class="form-group">
-            <label>Project ID</label>
+            <label>Project ID <small style="color:var(--text-muted)">(ej: creator-hub-abc123)</small></label>
             <input type="text" id="fb-project-id" value="${(Storage.get(Storage.KEYS.FIREBASE) || {}).projectId || ''}" placeholder="mi-proyecto">
           </div>
           <div class="form-group">
-            <label>App ID</label>
-            <input type="text" id="fb-app-id" value="${(Storage.get(Storage.KEYS.FIREBASE) || {}).appId || ''}" placeholder="1:123:web:abc">
+            <label>App ID <small style="color:var(--text-muted)">(empieza con 1:...:web:...)</small></label>
+            <input type="text" id="fb-app-id" value="${(Storage.get(Storage.KEYS.FIREBASE) || {}).appId || ''}" placeholder="1:123456789:web:abcdef123456">
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-primary btn-sm" id="save-firebase-btn">Guardar Firebase</button>
@@ -3118,6 +3176,18 @@ const App = {
         googleClientId: document.getElementById('settings-google-id').value.trim()
       });
       this.showToast('Google Calendar configurado', 'success');
+    });
+
+    document.getElementById('fb-parse-btn')?.addEventListener('click', () => {
+      const parsed = Cloud.parseConfigFromText(document.getElementById('fb-paste-config').value);
+      if (!parsed) {
+        this.showToast('No se encontr\u00f3 firebaseConfig v\u00e1lido. Copia el bloque completo de Firebase Console.', 'error');
+        return;
+      }
+      document.getElementById('fb-api-key').value = parsed.apiKey;
+      document.getElementById('fb-project-id').value = parsed.projectId;
+      document.getElementById('fb-app-id').value = parsed.appId;
+      this.showToast('Campos rellenados. Pulsa Guardar Firebase y luego Probar conexi\u00f3n', 'success');
     });
 
     document.getElementById('save-firebase-btn')?.addEventListener('click', async () => {
