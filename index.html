@@ -329,12 +329,12 @@ body {
           </div>
           <button type="submit" class="btn btn-primary btn-full">Crear cuenta</button>
         </form>
-        <details id="auth-cloud-section" class="auth-firebase-panel" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);font-weight:600">Nube JSONBin (opcional)</summary>
-          <p style="font-size:12px;color:var(--text-muted);margin:10px 0">No hace falta para crear cuenta. Solo si quieres sincronizar con otro dispositivo o unirte a un creador remoto. Config&uacute;ralo despu&eacute;s en Ajustes.</p>
-          <div class="form-group"><label for="auth-cloud-api-key">API Key JSONBin</label><input type="password" id="auth-cloud-api-key" placeholder="X-Master-Key" autocomplete="off"></div>
-          <div class="form-group"><label for="auth-cloud-bin-id">Bin ID</label><input type="text" id="auth-cloud-bin-id" placeholder="65a1b2c3..." autocomplete="off"></div>
-          <p id="auth-cloud-status" class="form-hint" style="margin-top:4px"></p>
+        <details id="auth-import-section" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);font-weight:600">¿Colaboras con un creador remoto? (opcional)</summary>
+          <p style="font-size:12px;color:var(--text-muted);margin:10px 0">Pide al creador su archivo .json o su enlace de invitación. No necesitas API keys.</p>
+          <button type="button" class="btn btn-secondary btn-sm" id="auth-import-btn">Importar archivo del creador</button>
+          <input type="file" id="auth-import-file" accept=".json,application/json" style="display:none">
+          <p id="auth-import-status" class="form-hint" style="margin-top:8px"></p>
         </details>
         <div id="auth-message" class="auth-message hidden"></div>
       </div>
@@ -442,7 +442,44 @@ const Storage = {
     COLLABS: 'creatorhub_collaborators',
     SETTINGS: 'creatorhub_settings',
     AI_CACHE: 'creatorhub_ai_cache',
-    CLOUD: 'creatorhub_cloud'
+    CLOUD: 'creatorhub_cloud',
+    CREATOR_REGISTRY: 'creatorhub_creator_registry'
+  },
+
+  getCreatorRegistry() {
+    return this.get(this.KEYS.CREATOR_REGISTRY) || { byUser: {}, byCode: {} };
+  },
+
+  mergeCreatorRegistry(registry) {
+    const local = this.getCreatorRegistry();
+    this.set(this.KEYS.CREATOR_REGISTRY, {
+      byUser: { ...local.byUser, ...(registry.byUser || {}) },
+      byCode: { ...local.byCode, ...(registry.byCode || {}) }
+    });
+  },
+
+  setCreatorCode(userId, code) {
+    if (!userId || !code) return;
+    const registry = this.getCreatorRegistry();
+    registry.byUser[userId] = code;
+    registry.byCode[code] = userId;
+    this.set(this.KEYS.CREATOR_REGISTRY, registry);
+
+    const users = this.getUsers();
+    const idx = users.findIndex(u => u.id === userId);
+    if (idx >= 0) {
+      users[idx].creatorCode = code;
+      this.saveUsers(users);
+    }
+  },
+
+  getCreatorCodeForUser(userId) {
+    return this.getCreatorRegistry().byUser[userId] || null;
+  },
+
+  findCreatorUserIdByCode(code) {
+    const normalized = (code || '').toUpperCase();
+    return this.getCreatorRegistry().byCode[normalized] || null;
   },
 
   get(key) {
@@ -1065,8 +1102,18 @@ const Auth = {
       return { creator: null, code, error: 'Formato de ID inv\u00e1lido. Debe ser como CR-XXXX-XXXX-XXXX' };
     }
 
-    let creator = Storage.getUsers().find(u => u.role === 'creator' && u.creatorCode === code);
-    if (creator) return { creator, code };
+    let creator = null;
+    const registryUserId = Storage.findCreatorUserIdByCode(code);
+    if (registryUserId) {
+      creator = Storage.getUsers().find(u => u.id === registryUserId);
+      if (creator) return { creator, code };
+    }
+
+    creator = Storage.getUsers().find(u => u.role === 'creator' && u.creatorCode === code);
+    if (creator) {
+      Storage.setCreatorCode(creator.id, code);
+      return { creator, code };
+    }
 
     if (!Cloud.isConfigured()) {
       await Cloud.bootstrap();
@@ -1086,6 +1133,7 @@ const Auth = {
         }
         if (creator) {
           Storage.cacheUser(creator);
+          if (creator.creatorCode) Storage.setCreatorCode(creator.id, creator.creatorCode);
           return { creator, code };
         }
         return {
@@ -1101,7 +1149,7 @@ const Auth = {
 
     return {
       creator: null, code,
-      error: 'Creador no encontrado en este dispositivo. Si est\u00e1 en otro navegador, pide que suba su cuenta a la nube (Ajustes) y luego pega API Key + Bin ID abajo, o usa el mismo navegador del creador.'
+      error: 'Creador no encontrado. Pide al creador su archivo .json (Ajustes \u2192 Exportar) o su enlace de invitaci\u00f3n. Tambi\u00e9n puedes usar el mismo navegador donde el creador tiene cuenta.'
     };
   },
 
@@ -1111,15 +1159,12 @@ const Auth = {
 
   ensureCreatorCode(user) {
     if (!user || user.role !== 'creator') return user;
-    if (user.creatorCode) return user;
 
-    user.creatorCode = Storage.generateId('CR');
-    const users = Storage.getUsers();
-    const idx = users.findIndex(u => u.id === user.id);
-    if (idx >= 0) {
-      users[idx].creatorCode = user.creatorCode;
-      Storage.saveUsers(users);
-    }
+    let code = Storage.getCreatorCodeForUser(user.id) || user.creatorCode;
+    if (!code) code = Storage.generateId('CR');
+
+    user.creatorCode = code;
+    Storage.setCreatorCode(user.id, code);
     return user;
   },
 
@@ -1158,7 +1203,7 @@ const Auth = {
       password: data.password,
       role: data.role,
       youtubeChannel: data.role === 'creator' ? data.youtubeChannel : '',
-      creatorCode: data.role === 'creator' ? Storage.generateId('CR') : null,
+      creatorCode: null,
       linkedCreators: creatorCode ? [creatorCode] : [],
       activeCreatorId: creatorCode,
       createdAt: new Date().toISOString()
@@ -1173,7 +1218,8 @@ const Auth = {
     Storage.saveUsers(users);
 
     if (data.role === 'creator') {
-      this.ensureCreatorCode(user);
+      user.creatorCode = Storage.generateId('CR');
+      Storage.setCreatorCode(user.id, user.creatorCode);
     }
 
     if (data.role === 'collaborator') {
@@ -1343,6 +1389,119 @@ const Auth = {
       const creator = await Cloud.getUserByCreatorCode(creatorCode);
       if (creator) await Cloud.pullWorkspace(creator.id);
     }
+  }
+};
+
+
+const Sync = {
+  VERSION: 1,
+
+  exportBackup(creatorId) {
+    const user = Auth.getCurrentUser();
+    if (!user) throw new Error('Debes iniciar sesi\u00f3n');
+
+    const registry = Storage.getCreatorRegistry();
+    const users = Storage.getUsers();
+    const payload = {
+      version: this.VERSION,
+      type: 'creatorhub-backup',
+      exportedAt: new Date().toISOString(),
+      exportedBy: user.username,
+      users,
+      creatorRegistry: registry,
+      projects: Storage.get(Storage.KEYS.PROJECTS) || {},
+      tasks: Storage.get(Storage.KEYS.TASKS) || {},
+      collaborators: Storage.get(Storage.KEYS.COLLABS) || {}
+    };
+
+    if (creatorId) {
+      payload.focusCreatorId = creatorId;
+    }
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `creatorhub-${user.username}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return payload;
+  },
+
+  importBackup(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          if (!data || data.type !== 'creatorhub-backup') {
+            reject(new Error('Archivo inv\u00e1lido. Debe ser un backup de CreatorHub (.json)'));
+            return;
+          }
+          this.mergeBackup(data);
+          resolve({ success: true, message: 'Datos importados correctamente' });
+        } catch (e) {
+          reject(new Error('No se pudo leer el archivo: ' + e.message));
+        }
+      };
+      reader.onerror = () => reject(new Error('Error al leer el archivo'));
+      reader.readAsText(file);
+    });
+  },
+
+  mergeBackup(data) {
+    if (data.creatorRegistry) {
+      Storage.mergeCreatorRegistry(data.creatorRegistry);
+    }
+
+    if (Array.isArray(data.users)) {
+      const local = Storage.getUsers();
+      const map = new Map(local.map(u => [u.id, u]));
+      data.users.forEach(u => {
+        const prev = map.get(u.id) || {};
+        map.set(u.id, {
+          ...prev,
+          ...u,
+          password: u.password || prev.password || '',
+          creatorCode: u.creatorCode || prev.creatorCode || Storage.getCreatorCodeForUser(u.id)
+        });
+      });
+      Storage.saveUsers([...map.values()]);
+      data.users.filter(u => u.role === 'creator' && u.creatorCode).forEach(u => {
+        Storage.setCreatorCode(u.id, u.creatorCode);
+      });
+    }
+
+    const mergeObj = (key, incoming) => {
+      if (!incoming || typeof incoming !== 'object') return;
+      const local = Storage.get(key) || {};
+      Storage.set(key, { ...local, ...incoming });
+    };
+
+    mergeObj(Storage.KEYS.PROJECTS, data.projects);
+    mergeObj(Storage.KEYS.TASKS, data.tasks);
+    mergeObj(Storage.KEYS.COLLABS, data.collaborators);
+  },
+
+  getInviteLink(creatorCode) {
+    const base = typeof AppConfig !== 'undefined' ? AppConfig.publicUrl : (window.location.origin + window.location.pathname);
+    return `${base}#unirse=${encodeURIComponent(creatorCode)}`;
+  },
+
+  applyInviteFromUrl() {
+    const hash = window.location.hash || '';
+    const match = hash.match(/unirse=([^&]+)/i);
+    if (!match) return null;
+    const code = Auth.normalizeCreatorCode(decodeURIComponent(match[1]));
+    const creatorId = document.getElementById('creator-id');
+    const registerTab = document.querySelector('.auth-tab[data-tab="register"]');
+    const collabRadio = document.querySelector('input[name="role"][value="collaborator"]');
+    if (creatorId) creatorId.value = code;
+    if (collabRadio) {
+      collabRadio.checked = true;
+      collabRadio.dispatchEvent(new Event('change'));
+    }
+    if (registerTab) registerTab.click();
+    return code;
   }
 };
 
@@ -3008,10 +3167,11 @@ const App = {
               Comparte este c\u00f3digo con tus colaboradores para que se conecten contigo.
             </p>
             <div class="creator-id-box">
-              <span class="creator-id-code" id="creator-id-display">${user.creatorCode || 'Generando...'}</span>
-              <button class="btn btn-secondary btn-sm" id="copy-id-btn">Copiar</button>
+              <span class="creator-id-code" id="creator-id-display">${user.creatorCode || '\u2014'}</span>
+              <button class="btn btn-secondary btn-sm" id="copy-id-btn">Copiar ID</button>
+              <button class="btn btn-secondary btn-sm" id="copy-invite-link-btn">Copiar enlace</button>
             </div>
-            ${!user.creatorCode ? '<p style="font-size:12px;color:var(--accent);margin-top:8px">Tu ID se generar\u00e1 autom\u00e1ticamente. Recarga Ajustes si no aparece.</p>' : ''}
+            <p style="font-size:11px;color:var(--text-muted);margin-top:8px">Comparte el ID o el enlace. Los colaboradores tambi\u00e9n pueden importar tu archivo .json.</p>
             <div class="form-group">
               <label>Canal de YouTube</label>
               <input type="text" id="settings-youtube" value="${user.youtubeChannel || ''}" placeholder="https://youtube.com/@tucanal">
@@ -3072,41 +3232,38 @@ const App = {
         </div>
 
         <div class="settings-card">
-          <h3>\u2601\ufe0f Sincronizaci\u00f3n en la nube (JSONBin \u2014 gratis)</h3>
+          <h3>\u{1f4c1} Sincronizaci\u00f3n por archivo (recomendado \u2014 gratis, sin claves)</h3>
           <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
-            Alternativa simple a Firebase. Solo necesitas una cuenta gratis en
-            <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a>
-            \u2014 sin reglas ni Firestore.
+            Exporta un archivo .json y env\u00edalo por WhatsApp, email o Discord. El colaborador lo importa y ya puede vincularse con tu ID.
           </p>
-          <details style="margin-bottom:12px;font-size:12px;color:var(--text-secondary)">
-            <summary style="cursor:pointer;color:var(--accent);font-weight:600">Gu\u00eda en 3 pasos</summary>
-            <ol style="margin:10px 0 0 18px;line-height:1.7">
-              <li>Crea cuenta en <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a> (gratis)</li>
-              <li>Ve a <strong>API Keys</strong> \u2192 copia tu <strong>X-Master-Key</strong></li>
-              <li>P\u00e9gala abajo \u2192 <strong>Crear nube</strong> \u2192 <strong>Subir mi cuenta a la nube</strong></li>
-              <li>Comparte con colaboradores: <strong>API Key + Bin ID</strong> (o sube <code>sync-config.json</code> a GitHub)</li>
-            </ol>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+            ${isCreator ? '<button class="btn btn-primary btn-sm" id="export-backup-btn">Exportar mis datos (.json)</button>' : ''}
+            <button class="btn btn-secondary btn-sm" id="import-backup-btn">Importar archivo (.json)</button>
+            <input type="file" id="import-backup-file" accept=".json,application/json" class="hidden" style="display:none">
+          </div>
+          <p id="sync-file-status" style="font-size:13px;color:var(--text-muted)">Sin servicios externos. Funciona siempre.</p>
+
+          <details style="margin-top:16px;font-size:12px;color:var(--text-secondary)">
+            <summary style="cursor:pointer;color:var(--accent)">Opcional: JSONBin (autom\u00e1tico en la nube)</summary>
+            <p style="margin:10px 0">Solo si quieres sync autom\u00e1tica. Requiere cuenta en <a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a>.</p>
+            <div class="form-group">
+              <label>API Key JSONBin</label>
+              <input type="password" id="cloud-api-key" value="${(Storage.get(Storage.KEYS.CLOUD) || {}).apiKey || ''}" placeholder="X-Master-Key">
+            </div>
+            <div class="form-group">
+              <label>Bin ID</label>
+              <input type="text" id="cloud-bin-id" value="${(Storage.get(Storage.KEYS.CLOUD) || {}).binId || ''}" placeholder="auto" readonly>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-secondary btn-sm" id="save-cloud-btn">Guardar</button>
+              <button class="btn btn-secondary btn-sm" id="test-cloud-btn">Probar</button>
+              ${isCreator ? '<button class="btn btn-secondary btn-sm" id="create-cloud-btn">Crear nube</button>' : ''}
+              ${isCreator ? '<button class="btn btn-secondary btn-sm" id="upload-cloud-btn">Subir cuenta</button>' : ''}
+            </div>
+            <div id="cloud-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">
+              ${Cloud.enabled ? '\u2705 JSONBin activo' : 'JSONBin no configurado'}
+            </div>
           </details>
-          <div class="form-group">
-            <label>API Key de JSONBin (X-Master-Key)</label>
-            <input type="password" id="cloud-api-key" value="${(Storage.get(Storage.KEYS.CLOUD) || {}).apiKey || ''}" placeholder="$2a$10... o tu master key">
-          </div>
-          <div class="form-group">
-            <label>Bin ID <small style="color:var(--text-muted)">(se crea autom\u00e1ticamente)</small></label>
-            <input type="text" id="cloud-bin-id" value="${(Storage.get(Storage.KEYS.CLOUD) || {}).binId || ''}" placeholder="65a1b2c3d4e5f6789..." readonly>
-            ${isCreator ? '<button type="button" class="btn btn-secondary btn-sm" id="copy-bin-id-btn" style="margin-top:6px">Copiar Bin ID para colaboradores</button>' : ''}
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-primary btn-sm" id="save-cloud-btn">Guardar</button>
-            <button class="btn btn-secondary btn-sm" id="test-cloud-btn">Probar conexi\u00f3n</button>
-            ${isCreator ? '<button class="btn btn-secondary btn-sm" id="create-cloud-btn">Crear nube</button>' : ''}
-            ${isCreator ? '<button class="btn btn-secondary btn-sm" id="upload-cloud-btn">Subir mi cuenta a la nube</button>' : ''}
-            ${isCreator ? '<button class="btn btn-secondary btn-sm" id="export-sync-btn">Descargar sync-config.json</button>' : ''}
-          </div>
-          ${isCreator ? '<p style="font-size:11px;color:var(--text-muted);margin-top:8px">Los colaboradores necesitan la misma API Key y Bin ID. Sube <code>sync-config.json</code> al repo para cargarlo autom\u00e1ticamente.</p>' : ''}
-          <div id="cloud-status" style="margin-top:10px;font-size:13px;color:var(--text-muted)">
-            ${Cloud.enabled ? '\u2705 Nube activa \u2014 los colaboradores remotos pueden sincronizar' : '\u26a0\ufe0f Solo modo local \u2014 configura JSONBin para colaboraci\u00f3n remota'}
-          </div>
         </div>
 
         <div class="settings-card">
@@ -3126,6 +3283,10 @@ const App = {
       document.getElementById('copy-id-btn').addEventListener('click', () => {
         navigator.clipboard.writeText(user.creatorCode);
         this.showToast('ID copiado al portapapeles', 'success');
+      });
+      document.getElementById('copy-invite-link-btn')?.addEventListener('click', () => {
+        navigator.clipboard.writeText(Sync.getInviteLink(user.creatorCode));
+        this.showToast('Enlace de invitaci\u00f3n copiado', 'success');
       });
       document.getElementById('save-channel-btn').addEventListener('click', () => {
         const raw = document.getElementById('settings-youtube').value.trim();
@@ -3193,6 +3354,40 @@ const App = {
         googleClientId: document.getElementById('settings-google-id').value.trim()
       });
       this.showToast('Google Calendar configurado', 'success');
+    });
+
+    document.getElementById('export-backup-btn')?.addEventListener('click', () => {
+      try {
+        Sync.exportBackup(Auth.getActiveCreatorId());
+        this.showToast('Archivo exportado. Env\u00edalo a tus colaboradores', 'success');
+      } catch (e) {
+        this.showToast(e.message, 'error');
+      }
+    });
+
+    const importInput = document.getElementById('import-backup-file');
+    document.getElementById('import-backup-btn')?.addEventListener('click', () => importInput?.click());
+    importInput?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const status = document.getElementById('sync-file-status');
+      try {
+        const result = await Sync.importBackup(file);
+        if (status) {
+          status.textContent = '\u2705 ' + result.message;
+          status.style.color = 'var(--success)';
+        }
+        this.showToast('Datos importados', 'success');
+        this.renderSettings();
+        this.setupHeader();
+      } catch (err) {
+        if (status) {
+          status.textContent = '\u274c ' + err.message;
+          status.style.color = 'var(--accent)';
+        }
+        this.showToast(err.message, 'error');
+      }
+      e.target.value = '';
     });
 
     const readCloudForm = () => ({
@@ -3429,39 +3624,28 @@ function setupAuthForms() {
       document.getElementById(tab.dataset.tab + '-form').classList.add('active');
     });
   });
-  function saveAuthCloudFromForm() {
-    const apiKey = document.getElementById('auth-cloud-api-key')?.value.trim();
-    const binId = document.getElementById('auth-cloud-bin-id')?.value.trim();
-    if (apiKey && binId) {
-      Cloud.saveConfig({ apiKey, binId });
-      return true;
-    }
-    return Cloud.isConfigured();
-  }
+  document.getElementById('auth-import-btn')?.addEventListener('click', () => {
+    document.getElementById('auth-import-file')?.click();
+  });
 
-  function fillAuthCloudFields() {
-    const c = Storage.get(Storage.KEYS.CLOUD) || {};
-    const api = document.getElementById('auth-cloud-api-key');
-    const bin = document.getElementById('auth-cloud-bin-id');
-    if (api && c.apiKey) api.value = c.apiKey;
-    if (bin && c.binId) bin.value = c.binId;
-    updateAuthCloudStatus();
-  }
-
-  function updateAuthCloudStatus() {
-    const el = document.getElementById('auth-cloud-status');
-    if (!el) return;
-    if (Cloud.enabled) {
-      el.textContent = '\u2705 Nube conectada';
-      el.style.color = 'var(--success)';
-    } else if (Cloud.getConfig()?.apiKey) {
-      el.textContent = '\u26a0\ufe0f Falta Bin ID del creador o la API Key es incorrecta.';
-      el.style.color = 'var(--accent)';
-    } else {
-      el.textContent = 'Opcional. Configura la nube en Ajustes despu\u00e9s de crear tu cuenta.';
-      el.style.color = 'var(--text-muted)';
+  document.getElementById('auth-import-file')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    const status = document.getElementById('auth-import-status');
+    if (!file) return;
+    try {
+      const result = await Sync.importBackup(file);
+      if (status) {
+        status.textContent = '\u2705 ' + result.message + ' Ya puedes registrarte con el ID del creador.';
+        status.style.color = 'var(--success)';
+      }
+    } catch (err) {
+      if (status) {
+        status.textContent = '\u274c ' + err.message;
+        status.style.color = 'var(--accent)';
+      }
     }
-  }
+    e.target.value = '';
+  });
 
   document.querySelectorAll('input[name="role"]').forEach(radio => {
     radio.addEventListener('change', () => {
@@ -3473,19 +3657,12 @@ function setupAuthForms() {
     });
   });
 
-  ['auth-cloud-api-key', 'auth-cloud-bin-id'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', () => {
-      saveAuthCloudFromForm();
-      updateAuthCloudStatus();
-    });
-  });
   document.getElementById('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     btn.textContent = 'Entrando...';
     try {
-      saveAuthCloudFromForm();
       await Cloud.bootstrap();
       const result = await Auth.login(
         document.getElementById('login-username').value.trim(),
@@ -3506,7 +3683,6 @@ function setupAuthForms() {
     btn.disabled = true;
     btn.textContent = 'Creando...';
     try {
-      saveAuthCloudFromForm();
       await Cloud.bootstrap();
       const role = document.querySelector('input[name="role"]:checked').value;
       const data = {
@@ -3538,7 +3714,7 @@ function showAuthMessage(result) {
 document.addEventListener('DOMContentLoaded', async () => {
   await Cloud.bootstrap();
   setupAuthForms();
-  fillAuthCloudFields();
+  Sync.applyInviteFromUrl();
   if (Auth.getSession()) Router.showApp();
   else Router.showAuth();
 });
