@@ -2805,14 +2805,12 @@ const Calendar = {
     const cacheAge = cache?.fetchedAt ? Date.now() - new Date(cache.fetchedAt).getTime() : Infinity;
     if (!force && cache && cacheAge < 15 * 60 * 1000) return false;
 
-    if (!settings.googleAccessToken) return false;
-
     this._ytLoading = true;
     try {
       const events = await AI.fetchScheduledVideos(
         creator.youtubeChannel,
         settings.youtubeApiKey,
-        settings.googleAccessToken
+        settings.googleAccessToken || null
       );
       const prevIds = (cache?.events || []).map(e => e.id).join(',');
       const nextIds = events.map(e => e.id).join(',');
@@ -2915,20 +2913,19 @@ const Calendar = {
         <h3>\u{1f4fa} Videos programados en YouTube</h3>
         <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
           ${isCollab
-            ? 'Muestra los videos que el creador tiene programados en su canal (requiere que el creador conecte Google + YouTube).'
-            : 'Importa autom\u00e1ticamente los videos con fecha de publicaci\u00f3n programada en tu canal de YouTube.'}
+            ? 'Los videos programados del creador aparecen en el calendario de arriba (usa su API Key de YouTube).'
+            : 'Los videos programados de tu canal aparecen en el calendario de arriba. Solo necesitas la YouTube Data API Key y la URL del canal en Ajustes.'}
         </p>
         ${!ytMeta.hasApiKey ? `
           <p style="font-size:12px;color:var(--accent)">\u26a0\ufe0f Configura la YouTube Data API Key en Ajustes.</p>
         ` : !ytMeta.hasChannel ? `
           <p style="font-size:12px;color:var(--accent)">\u26a0\ufe0f Configura la URL de tu canal en Ajustes.</p>
-        ` : !ytMeta.hasOAuth ? `
-          <p style="font-size:12px;color:var(--warning)">Conecta Google abajo (incluye permiso de YouTube) para leer videos programados privados.</p>
         ` : `
-          <p style="font-size:12px;color:var(--text-muted)">${ytMeta.count} video(s) programado(s) \u00b7 ${fetchedLabel}</p>
+          <p style="font-size:12px;color:var(--text-muted)">${ytMeta.count} video(s) en el calendario \u00b7 ${fetchedLabel}</p>
+          ${!ytMeta.hasOAuth ? '<p style="font-size:11px;color:var(--text-muted);margin-top:6px">Opcional: conectar Google Calendar abajo puede mostrar m\u00e1s videos privados programados.</p>' : ''}
         `}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <button class="btn btn-primary btn-sm" id="yt-schedule-sync" ${!ytMeta.hasApiKey || !ytMeta.hasChannel || !ytMeta.hasOAuth ? 'disabled' : ''}>
+          <button class="btn btn-primary btn-sm" id="yt-schedule-sync" ${!ytMeta.hasApiKey || !ytMeta.hasChannel ? 'disabled' : ''}>
             \u21bb Actualizar desde YouTube
           </button>
         </div>
@@ -2939,16 +2936,16 @@ const Calendar = {
         <h3>\u{1f4c5} Google Calendar</h3>
         <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
           ${isCollab
-            ? 'Usas el calendario del creador. No puedes ver ni cambiar su configuraci\u00f3n.'
-            : 'Conecta Google para sincronizar proyectos/tareas y leer videos programados de YouTube (permiso youtube.readonly).'}
+            ? 'Opcional: el creador puede exportar proyectos y tareas a su Google Calendar.'
+            : 'Opcional: exporta proyectos y tareas de CreatorHub a tu Google Calendar. No es necesario para ver videos de YouTube aqu\u00ed.'}
         </p>
         ${isCollab ? `
           <p style="font-size:12px;color:var(--text-muted)">
-            ${this.isGoogleConnected() ? '\u2705 Calendario del creador conectado' : '\u26a0\ufe0f El creador a\u00fan no ha conectado Google'}
+            ${this.isGoogleConnected() ? '\u2705 Google Calendar del creador conectado' : 'Google Calendar no conectado (opcional)'}
           </p>
         ` : `
           <button class="btn btn-secondary" id="google-cal-connect" ${!this.hasGoogleConfig() ? 'disabled' : ''}>
-            ${this.isGoogleConnected() ? '\u2713 Conectado \u2014 Sincronizar ahora' : 'Conectar Google (Calendar + YouTube)'}
+            ${this.isGoogleConnected() ? '\u2713 Conectado \u2014 Exportar a Google' : 'Conectar Google Calendar (opcional)'}
           </button>
         `}
         <div id="google-cal-status" style="margin-top:10px;font-size:13px;color:var(--text-muted)"></div>
@@ -2991,7 +2988,7 @@ const Calendar = {
       connectBtn.addEventListener('click', () => this.connectGoogleCalendar());
     }
 
-    if (ytMeta.hasApiKey && ytMeta.hasChannel && ytMeta.hasOAuth) {
+    if (ytMeta.hasApiKey && ytMeta.hasChannel) {
       this.loadYouTubeScheduled(false).then(updated => {
         if (updated) this.render(container);
       });
@@ -3033,20 +3030,17 @@ const Calendar = {
     }
 
     const redirectUri = typeof AppConfig !== 'undefined' ? AppConfig.oauthRedirectUri : (window.location.origin + window.location.pathname);
-    const scopes = [
-      'https://www.googleapis.com/auth/calendar.events',
-      'https://www.googleapis.com/auth/youtube.readonly'
-    ].join(' ');
+    const scope = 'https://www.googleapis.com/auth/calendar.events';
 
     if (this.isGoogleConnected()) {
       this.syncToGoogleCalendar();
       return;
     }
 
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${settings.googleClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scopes)}&state=google_cal&include_granted_scopes=true&prompt=consent`;
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${settings.googleClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scope)}&state=google_cal`;
 
     window.open(authUrl, '_blank', 'width=500,height=600');
-    App.showToast('Autoriza Calendar y YouTube en la ventana emergente', 'success');
+    App.showToast('Autoriza Google Calendar en la ventana emergente', 'success');
   },
 
   handleGoogleCallback() {
@@ -3064,10 +3058,7 @@ const Calendar = {
 
     window.location.hash = '';
     this.syncToGoogleCalendar();
-    this.loadYouTubeScheduled(true).then(() => {
-      App.refreshCurrentSection?.();
-    });
-    App.showToast('Google conectado \u2014 sincronizando YouTube programado', 'success');
+    App.showToast('Google Calendar conectado', 'success');
   },
 
   async syncToGoogleCalendar() {
@@ -3274,12 +3265,80 @@ const AI = {
     return data;
   },
 
-  async fetchScheduledVideos(channelUrl, apiKey, accessToken) {
+  mapScheduledVideo(v, source = 'upload') {
+    const publishAt = v.status?.publishAt || v.liveStreamingDetails?.scheduledStartTime;
+    if (!publishAt) return null;
+    const publishMs = new Date(publishAt).getTime();
+    if (publishMs <= Date.now()) return null;
+
+    const dateStr = publishAt.split('T')[0];
+    const timePart = publishAt.includes('T') ? publishAt.split('T')[1] : '';
+    const timeStr = timePart ? timePart.replace('Z', '').slice(0, 5) : '';
+
+    return {
+      id: v.id,
+      title: v.snippet?.title || 'Video programado',
+      date: dateStr,
+      time: timeStr,
+      publishAt,
+      thumbnail: v.snippet?.thumbnails?.default?.url || '',
+      privacyStatus: v.status?.privacyStatus || 'public',
+      source,
+      url: `https://www.youtube.com/watch?v=${v.id}`
+    };
+  },
+
+  async fetchUpcomingFromSearch(channelId, apiKey, accessToken) {
+    const key = apiKey.trim();
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&eventType=upcoming&maxResults=25&key=${key}`;
+    const data = await this.ytFetch(url, accessToken);
+    const ids = (data.items || []).map(i => i.id?.videoId).filter(Boolean);
+    if (!ids.length) return [];
+
+    const videosUrl = `https://www.googleapis.com/youtube/v3/videos?part=status,snippet,liveStreamingDetails&id=${ids.join(',')}&key=${key}`;
+    const videosData = await this.ytFetch(videosUrl, accessToken);
+    return (videosData.items || [])
+      .map(v => this.mapScheduledVideo(v, 'premiere'))
+      .filter(Boolean);
+  },
+
+  async fetchScheduledFromUploads(uploadsPlaylistId, apiKey, accessToken) {
+    const key = apiKey.trim();
+    const videoIds = [];
+    let pageToken = '';
+
+    do {
+      const playlistUrl = new URL('https://www.googleapis.com/youtube/v3/playlistItems');
+      playlistUrl.searchParams.set('part', 'contentDetails,snippet');
+      playlistUrl.searchParams.set('playlistId', uploadsPlaylistId);
+      playlistUrl.searchParams.set('maxResults', '50');
+      playlistUrl.searchParams.set('key', key);
+      if (pageToken) playlistUrl.searchParams.set('pageToken', pageToken);
+
+      const playlistData = await this.ytFetch(playlistUrl.toString(), accessToken);
+      (playlistData.items || []).forEach(item => {
+        const id = item.contentDetails?.videoId;
+        if (id) videoIds.push(id);
+      });
+      pageToken = playlistData.nextPageToken || '';
+    } while (pageToken && videoIds.length < 150);
+
+    const scheduled = [];
+    for (let i = 0; i < videoIds.length; i += 50) {
+      const chunk = videoIds.slice(i, i + 50);
+      const videosUrl = `https://www.googleapis.com/youtube/v3/videos?part=status,snippet,contentDetails,liveStreamingDetails&id=${chunk.join(',')}&key=${key}`;
+      const videosData = await this.ytFetch(videosUrl, accessToken);
+      (videosData.items || []).forEach(v => {
+        const mapped = this.mapScheduledVideo(v, 'upload');
+        if (mapped) scheduled.push(mapped);
+      });
+    }
+    return scheduled;
+  },
+
+  async fetchScheduledVideos(channelUrl, apiKey, accessToken = null) {
     if (!apiKey?.trim()) {
       throw new Error('Configura tu YouTube Data API Key en Ajustes');
-    }
-    if (!accessToken) {
-      throw new Error('Conecta Google Calendar en el Calendario (incluye acceso a YouTube) para leer videos programados');
     }
     if (!channelUrl?.trim()) {
       throw new Error('Configura la URL de tu canal en Ajustes');
@@ -3292,60 +3351,29 @@ const AI = {
       `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channelId}&key=${apiKey.trim()}`
     );
     const uploadsPlaylistId = channelData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
-    if (!uploadsPlaylistId) {
-      throw new Error('No se encontr\u00f3 la lista de subidas del canal');
+
+    const map = new Map();
+
+    const addList = (list) => {
+      (list || []).forEach(item => {
+        if (item?.id) map.set(item.id, item);
+      });
+    };
+
+    addList(await this.fetchUpcomingFromSearch(channelId, apiKey, null));
+
+    if (uploadsPlaylistId) {
+      addList(await this.fetchScheduledFromUploads(uploadsPlaylistId, apiKey, null));
     }
 
-    const videoIds = [];
-    let pageToken = '';
-    do {
-      const playlistUrl = new URL('https://www.googleapis.com/youtube/v3/playlistItems');
-      playlistUrl.searchParams.set('part', 'contentDetails');
-      playlistUrl.searchParams.set('playlistId', uploadsPlaylistId);
-      playlistUrl.searchParams.set('maxResults', '50');
-      playlistUrl.searchParams.set('key', apiKey.trim());
-      if (pageToken) playlistUrl.searchParams.set('pageToken', pageToken);
-
-      const playlistData = await this.ytFetch(playlistUrl.toString(), accessToken);
-      (playlistData.items || []).forEach(item => {
-        const id = item.contentDetails?.videoId;
-        if (id) videoIds.push(id);
-      });
-      pageToken = playlistData.nextPageToken || '';
-    } while (pageToken && videoIds.length < 150);
-
-    const scheduled = [];
-    const now = Date.now();
-
-    for (let i = 0; i < videoIds.length; i += 50) {
-      const chunk = videoIds.slice(i, i + 50);
-      const videosUrl = `https://www.googleapis.com/youtube/v3/videos?part=status,snippet,contentDetails&id=${chunk.join(',')}&key=${apiKey.trim()}`;
-      const videosData = await this.ytFetch(videosUrl, accessToken);
-
-      (videosData.items || []).forEach(v => {
-        const publishAt = v.status?.publishAt;
-        if (!publishAt) return;
-        const publishMs = new Date(publishAt).getTime();
-        if (publishMs <= now) return;
-
-        const dateStr = publishAt.split('T')[0];
-        const timePart = publishAt.includes('T') ? publishAt.split('T')[1] : '';
-        const timeStr = timePart ? timePart.replace('Z', '').slice(0, 5) : '';
-
-        scheduled.push({
-          id: v.id,
-          title: v.snippet?.title || 'Video programado',
-          date: dateStr,
-          time: timeStr,
-          publishAt,
-          thumbnail: v.snippet?.thumbnails?.default?.url || '',
-          privacyStatus: v.status?.privacyStatus || 'private',
-          url: `https://www.youtube.com/watch?v=${v.id}`
-        });
-      });
+    if (accessToken) {
+      addList(await this.fetchUpcomingFromSearch(channelId, apiKey, accessToken));
+      if (uploadsPlaylistId) {
+        addList(await this.fetchScheduledFromUploads(uploadsPlaylistId, apiKey, accessToken));
+      }
     }
 
-    return scheduled.sort((a, b) => a.publishAt.localeCompare(b.publishAt));
+    return [...map.values()].sort((a, b) => a.publishAt.localeCompare(b.publishAt));
   },
 
   extractHandle(channelUrl) {
