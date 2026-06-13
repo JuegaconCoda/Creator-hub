@@ -148,7 +148,18 @@ body {
 .sidebar {
   width: var(--sidebar-width); background: var(--bg-secondary); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100;
+  transition: transform 0.25s ease;
 }
+.sidebar-backdrop {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 90;
+}
+.header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.menu-toggle {
+  display: none; align-items: center; justify-content: center; width: 40px; height: 40px;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text-primary);
+  border-radius: var(--radius-sm); font-size: 20px; cursor: pointer; flex-shrink: 0;
+}
+.menu-toggle:hover { background: var(--bg-hover); }
 .sidebar-header { padding: 20px; border-bottom: 1px solid var(--border); }
 .sidebar-nav { flex: 1; padding: 12px; overflow-y: auto; }
 .nav-item {
@@ -191,7 +202,16 @@ body {
 .kanban-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
 .kanban-board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; min-height: 500px; }
 @media (max-width: 1200px) { .kanban-board { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 768px) { .kanban-board { grid-template-columns: 1fr; } .sidebar { transform: translateX(-100%); } .main-content { margin-left: 0; } }
+@media (max-width: 768px) {
+  .kanban-board { grid-template-columns: 1fr; }
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); box-shadow: 0 0 40px rgba(0,0,0,0.5); }
+  .sidebar-backdrop.show { display: block; }
+  .main-content { margin-left: 0; }
+  .menu-toggle { display: flex; }
+  .app-header { padding: 0 16px; }
+  .page-content { padding: 16px; }
+}
 
 .kanban-column { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 200px); }
 .column-header { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
@@ -570,9 +590,13 @@ html.has-session body.auth-page { display: block; overflow: auto; }
         </nav>
         <div class="sidebar-footer"><button class="nav-item" id="logout-btn"><span class="nav-icon">&#128682;</span> Cerrar sesi&oacute;n</button></div>
       </aside>
+      <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
       <main class="main-content">
         <header class="app-header">
-          <h1 class="page-title" id="page-title">Dashboard</h1>
+          <div class="header-left">
+            <button class="menu-toggle" id="menu-toggle" aria-label="Abrir men&uacute;" aria-expanded="false">&#9776;</button>
+            <h1 class="page-title" id="page-title">Dashboard</h1>
+          </div>
           <div class="header-actions">
             <div id="creator-switcher-container"></div>
             <div class="user-badge"><div class="user-avatar" id="user-avatar">?</div><div><div id="user-name">Usuario</div><span class="role-tag" id="user-role">&mdash;</span></div></div>
@@ -5253,6 +5277,7 @@ const App = {
 
     this.setupHeader();
     this.setupNavigation();
+    this.setupMobileMenu();
     this.setupModal();
     this.setupLogout();
     this.setupWorkspaceSync();
@@ -5325,6 +5350,44 @@ const App = {
     });
   },
 
+  setupMobileMenu() {
+    const toggle = document.getElementById('menu-toggle');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (toggle) {
+      toggle.addEventListener('click', () => this.toggleSidebar());
+    }
+    if (backdrop) {
+      backdrop.addEventListener('click', () => this.closeSidebar());
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.closeSidebar();
+    });
+  },
+
+  toggleSidebar() {
+    const sidebar = document.querySelector('.sidebar');
+    if (sidebar?.classList.contains('open')) this.closeSidebar();
+    else this.openSidebar();
+  },
+
+  openSidebar() {
+    const sidebar = document.querySelector('.sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    const toggle = document.getElementById('menu-toggle');
+    sidebar?.classList.add('open');
+    if (backdrop) { backdrop.hidden = false; backdrop.classList.add('show'); }
+    toggle?.setAttribute('aria-expanded', 'true');
+  },
+
+  closeSidebar() {
+    const sidebar = document.querySelector('.sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    const toggle = document.getElementById('menu-toggle');
+    sidebar?.classList.remove('open');
+    if (backdrop) { backdrop.classList.remove('show'); backdrop.hidden = true; }
+    toggle?.setAttribute('aria-expanded', 'false');
+  },
+
   setupLogout() {
     document.getElementById('logout-btn').addEventListener('click', () => Auth.logout());
   },
@@ -5339,6 +5402,8 @@ const App = {
 
   navigate(section) {
     this.currentSection = section;
+
+    this.closeSidebar();
 
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.querySelector(`.nav-item[data-section="${section}"]`)?.classList.add('active');
