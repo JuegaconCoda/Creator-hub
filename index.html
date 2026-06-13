@@ -3624,18 +3624,17 @@ IMPORTANTE: Responde \u00daNICAMENTE con JSON v\u00e1lido. Sin markdown, sin tex
       }
     }
 
-    const channelUrl = this.normalizeChannelUrl(creator.youtubeChannel);
-    if (channelUrl !== creator.youtubeChannel) {
-      const users = Storage.getUsers();
-      const idx = users.findIndex(u => u.id === creator.id);
-      if (idx !== -1) {
-        users[idx].youtubeChannel = channelUrl;
-        Storage.saveUsers(users);
-      }
-    }
-
     let channelData;
     try {
+      const channelUrl = this.normalizeChannelUrl(creator.youtubeChannel);
+      if (channelUrl !== creator.youtubeChannel) {
+        const users = Storage.getUsers();
+        const idx = users.findIndex(u => u.id === creator.id);
+        if (idx !== -1) {
+          users[idx].youtubeChannel = channelUrl;
+          Storage.saveUsers(users);
+        }
+      }
       channelData = await this.fetchYouTubeData(channelUrl, settings.youtubeApiKey.trim());
     } catch (e) {
       console.error('YouTube fetch error:', e);
@@ -3684,17 +3683,22 @@ IMPORTANTE: Responde \u00daNICAMENTE con JSON v\u00e1lido. Sin markdown, sin tex
     }
 
     const model = this.GEMINI_MODELS[modelIndex];
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature, maxOutputTokens: maxTokens }
-        })
-      }
-    );
+    let res;
+    try {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature, maxOutputTokens: maxTokens }
+          })
+        }
+      );
+    } catch {
+      throw new Error('No se pudo conectar con Gemini. Revisa tu conexi\u00f3n a internet y que la API key sea v\u00e1lida.');
+    }
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -3770,19 +3774,24 @@ IMPORTANTE: Responde \u00daNICAMENTE con JSON v\u00e1lido. Sin markdown, sin tex
     }
 
     const model = this.GROQ_MODELS[modelIndex];
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature,
-        max_tokens: maxTokens
-      })
-    });
+    let res;
+    try {
+      res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature,
+          max_tokens: maxTokens
+        })
+      });
+    } catch {
+      throw new Error('No se pudo conectar con Groq. Revisa tu conexi\u00f3n a internet y que la API key sea v\u00e1lida.');
+    }
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -3849,20 +3858,21 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
   renderChannelPreview(channelData) {
     if (!channelData?.verified) return '';
 
-    const topVideos = (channelData.recentVideos || []).slice(0, 5);
+    const num = n => (Number(n) || 0).toLocaleString();
+    const topVideos = (Array.isArray(channelData.recentVideos) ? channelData.recentVideos : []).slice(0, 5);
     return `
       <div class="ai-card" style="margin-bottom:16px;border-color:var(--success)">
         <h3>\u2705 Canal verificado desde YouTube</h3>
-        <p style="font-size:14px;margin-bottom:8px"><strong>${channelData.name}</strong> ${channelData.handle ? `(${channelData.handle})` : ''}</p>
+        <p style="font-size:14px;margin-bottom:8px"><strong>${channelData.name || ''}</strong> ${channelData.handle ? `(${channelData.handle})` : ''}</p>
         <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
-          ${channelData.subscribers.toLocaleString()} suscriptores \u00b7 ${channelData.videoCount} videos \u00b7 ${channelData.totalViews.toLocaleString()} vistas totales
+          ${num(channelData.subscribers)} suscriptores \u00b7 ${num(channelData.videoCount)} videos \u00b7 ${num(channelData.totalViews)} vistas totales
         </p>
         <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">\u00daltimos videos analizados:</p>
         <div class="recommendation-list">
           ${topVideos.map(v => `
             <div class="recommendation-item" style="border-left-color:var(--success)">
-              <h4>${v.title}</h4>
-              <p>${v.views.toLocaleString()} vistas \u00b7 ${v.publishedAt}</p>
+              <h4>${v.title || ''}</h4>
+              <p>${num(v.views)} vistas \u00b7 ${v.publishedAt || ''}</p>
             </div>
           `).join('')}
         </div>
@@ -3941,9 +3951,25 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
 
     const runAnalysis = async (force = false) => {
       const resultsEl = document.getElementById('ai-results');
+      if (!resultsEl) return;
       resultsEl.innerHTML = '<div class="ai-loading"><div class="spinner"></div> Conectando con YouTube y analizando con IA...</div>';
 
-      const analysis = await this.analyzeChannel(force);
+      let analysis;
+      try {
+        analysis = await this.analyzeChannel(force);
+      } catch (e) {
+        console.error('Analyze channel crashed:', e);
+        resultsEl.innerHTML = `
+          <div class="empty-state">
+            <h3>No se pudo completar el an\u00e1lisis</h3>
+            <p>${this.formatError(e)}</p>
+            <button class="btn btn-primary btn-sm" id="retry-ai-btn" style="margin-top:12px">\u21bb Reintentar</button>
+          </div>
+        `;
+        document.getElementById('retry-ai-btn')?.addEventListener('click', () => runAnalysis(true));
+        return;
+      }
+
       if (!analysis) {
         resultsEl.innerHTML = '<div class="empty-state"><h3>Error de conexi\u00f3n</h3><p>Verifica tu URL de canal y la YouTube Data API Key en Ajustes</p></div>';
         return;
@@ -3961,8 +3987,22 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
         return;
       }
 
-      resultsEl.innerHTML = this.renderChannelPreview(analysis.channelData) + this.renderAnalysis(analysis);
-      this.renderIdeaButtons(analysis);
+      try {
+        resultsEl.innerHTML = this.renderChannelPreview(analysis.channelData) + this.renderAnalysis(analysis);
+        this.renderIdeaButtons(analysis);
+      } catch (e) {
+        console.error('Render analysis crashed:', e);
+        resultsEl.innerHTML = this.renderChannelPreview(analysis.channelData) + `
+          <div class="ai-card" style="margin-top:16px;border-color:var(--warning)">
+            <h3>\u26a0\ufe0f No se pudo mostrar el an\u00e1lisis</h3>
+            <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">La IA devolvi\u00f3 un formato inesperado. Pulsa Reintentar.</p>
+            <button class="btn btn-primary btn-sm" id="retry-ai-btn">\u21bb Reintentar an\u00e1lisis IA</button>
+          </div>
+        `;
+        document.getElementById('retry-ai-btn')?.addEventListener('click', () => runAnalysis(true));
+        return;
+      }
+
       const refreshBtn = document.getElementById('refresh-analyze-btn');
       if (!refreshBtn && canUse) {
         const header = container.querySelector('.kanban-header > div');
@@ -4005,22 +4045,30 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
     if (data.partial) return '';
     if (data.raw) return `<div class="ai-result">${data.raw}</div>`;
 
+    const asArray = v => Array.isArray(v) ? v : [];
+    const detectedThemes = asArray(data.detectedThemes);
+    const trendingTopics = asArray(data.trendingTopics);
+    const titleSuggestions = asArray(data.titleSuggestions);
+    const contentIdeas = asArray(data.contentIdeas);
+    const similarChannels = asArray(data.similarChannels);
+    const optimizationTips = asArray(data.optimizationTips);
+
     return `
       <div class="ai-grid">
         <div class="ai-card">
           <h3>\u{1f4c2} Categor\u00eda</h3>
           <p><strong>${data.category || '\u2014'}</strong> \u2192 ${data.subcategory || '\u2014'}</p>
           <p style="margin-top:8px;font-size:13px;color:var(--text-secondary)">${data.nicheAnalysis || ''}</p>
-          ${data.detectedThemes?.length ? `
+          ${detectedThemes.length ? `
             <p style="margin-top:8px;font-size:12px;color:var(--text-muted)">
-              Temas detectados: ${data.detectedThemes.join(' \u00b7 ')}
+              Temas detectados: ${detectedThemes.join(' \u00b7 ')}
             </p>
           ` : ''}
         </div>
         <div class="ai-card">
           <h3>\u{1f525} Temas trending</h3>
           <div class="recommendation-list">
-            ${(data.trendingTopics || []).map(t => `<div class="recommendation-item"><p>${t}</p></div>`).join('')}
+            ${trendingTopics.map(t => `<div class="recommendation-item"><p>${t}</p></div>`).join('')}
           </div>
         </div>
       </div>
@@ -4028,10 +4076,10 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
       <div class="ai-card" style="margin-top:16px">
         <h3>\u{1f3af} T\u00edtulos sugeridos</h3>
         <div class="recommendation-list">
-          ${(data.titleSuggestions || []).map(t => `
+          ${titleSuggestions.map(t => `
             <div class="recommendation-item">
-              <h4>${t.title}</h4>
-              <p>${t.reason}</p>
+              <h4>${typeof t === 'string' ? t : (t?.title || '')}</h4>
+              <p>${typeof t === 'string' ? '' : (t?.reason || '')}</p>
             </div>
           `).join('')}
         </div>
@@ -4040,10 +4088,10 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
       <div class="ai-card" style="margin-top:16px">
         <h3>\u{1f4a1} Ideas de contenido</h3>
         <div class="recommendation-list">
-          ${(data.contentIdeas || []).map(i => `
+          ${contentIdeas.map(i => `
             <div class="recommendation-item">
-              <h4>${i.idea} <span class="card-tag">${i.potential || ''}</span></h4>
-              <p>Formato: ${i.format || '\u2014'}</p>
+              <h4>${typeof i === 'string' ? i : (i?.idea || '')} <span class="card-tag">${typeof i === 'string' ? '' : (i?.potential || '')}</span></h4>
+              <p>Formato: ${typeof i === 'string' ? '\u2014' : (i?.format || '\u2014')}</p>
             </div>
           `).join('')}
         </div>
@@ -4051,10 +4099,10 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
 
       <div class="ai-card" style="margin-top:16px">
         <h3>\u{1f4c8} Canales similares</h3>
-        <p style="font-size:13px;color:var(--text-secondary)">${(data.similarChannels || []).join(' \u00b7 ')}</p>
+        <p style="font-size:13px;color:var(--text-secondary)">${similarChannels.join(' \u00b7 ')}</p>
         <h3 style="margin-top:16px">\u{1f4a1} Tips de optimizaci\u00f3n</h3>
         <ul style="margin-top:8px;padding-left:20px;font-size:13px;color:var(--text-secondary)">
-          ${(data.optimizationTips || []).map(t => `<li style="margin-bottom:4px">${t}</li>`).join('')}
+          ${optimizationTips.map(t => `<li style="margin-bottom:4px">${t}</li>`).join('')}
         </ul>
       </div>
     `;
@@ -4064,7 +4112,9 @@ Responde solo con una lista numerada de t\u00edtulos en espa\u00f1ol, sin explic
     const container = document.getElementById('idea-to-project');
     if (!container || !Permissions.can('edit')) return;
 
-    const ideas = data.contentIdeas || [];
+    const ideas = (Array.isArray(data.contentIdeas) ? data.contentIdeas : [])
+      .map(i => typeof i === 'string' ? { idea: i, format: '', potential: '' } : i)
+      .filter(i => i && i.idea);
     container.innerHTML = ideas.map((idea, i) => `
       <button class="btn btn-secondary btn-sm" style="margin:4px" data-idea="${i}">
         + ${idea.idea.substring(0, 40)}${idea.idea.length > 40 ? '...' : ''}
